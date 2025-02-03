@@ -82,6 +82,8 @@ EC service houses the business logic that glues the EC peripheral Rust driver + 
   - library crate
 - hid-service
   - library crate
+- battery-service
+  - library crate
 
 ### embedded-services
 
