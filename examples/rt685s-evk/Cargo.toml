@@ -46,3 +46,6 @@ power-button-service = { path = "../../power-button-service", features = [
 
 embedded-hal = "1.0.0"
 embedded-hal-async = "1.0.0"
+embedded-batteries-async = { git = "https://github.com/OpenDevicePartnership/embedded-batteries" }
+battery-service = { path = "../../battery-service" }
+bq25773 = { git = "https://github.com/OpenDevicePartnership/bq25773" }
