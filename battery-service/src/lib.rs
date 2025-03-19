@@ -2,6 +2,8 @@
 
 use embassy_futures::select::select;
 use embassy_futures::select::Either::{First, Second};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::signal::Signal;
 use embedded_batteries_async::charger::{MilliAmps, MilliVolts};
 use embedded_services::comms::{self, External};
 use embedded_services::ec_type::message::BatteryMessage;
@@ -18,12 +20,29 @@ pub enum OemMessage {
     ChargeCurrent(MilliAmps),
 }
 
+pub trait BatteryMsgTrait {
+    fn is_charger_msg(&self) -> bool;
+}
+
+impl BatteryMsgTrait for BatteryMessage {
+    fn is_charger_msg(&self) -> bool {
+        false
+    }
+}
+
+impl BatteryMsgTrait for OemMessage {
+    fn is_charger_msg(&self) -> bool {
+        true
+    }
+}
+
 /// Generic to hold OEM messages and standard ACPI messages
 /// Can add more as more services have messages
 #[derive(Copy, Clone, Debug)]
-pub enum BatteryMsgs {
+pub enum BatteryMsgs<T: BatteryMsgTrait> {
     Acpi(BatteryMessage),
     Oem(OemMessage),
+    OemGeneric(T),
 }
 
 /// Battery Service Errors
@@ -35,30 +54,35 @@ pub enum BatteryServiceErrors {
 }
 
 pub struct Service<
+    'a,
     SmartCharger: embedded_batteries_async::charger::Charger,
     SmartBattery: embedded_batteries_async::smart_battery::SmartBattery,
+    CustomMsg: BatteryMsgTrait,
 > {
     pub endpoint: comms::Endpoint,
-    pub charger: charger::Charger<SmartCharger>,
+    pub charger: charger::Charger<SmartCharger, CustomMsg>,
     pub fuel_gauge: fuel_gauge::FuelGauge<SmartBattery>,
+    oem_msg_signal: Signal<NoopRawMutex, comms::Message<'a>>,
 }
 
 impl<
+        'a,
         SmartCharger: embedded_batteries_async::charger::Charger,
         SmartBattery: embedded_batteries_async::smart_battery::SmartBattery,
-    > Service<SmartCharger, SmartBattery>
+    > Service<'a, SmartCharger, SmartBattery>
 {
     pub fn new(smart_charger: SmartCharger, fuel_gauge: SmartBattery) -> Self {
         Service {
             endpoint: comms::Endpoint::uninit(comms::EndpointID::Internal(comms::Internal::Battery)),
             charger: charger::Charger::new(smart_charger),
             fuel_gauge: fuel_gauge::FuelGauge::new(fuel_gauge),
+            oem_msg_signal: Signal::new(),
         }
     }
 
     /// Function to request a variable amount of battery messages.
     /// Intended to be called within a timer callback context, for example to get the voltage every 1 second.
-    pub async fn broadcast_dynamic_battery_msgs(&self, messages: &[BatteryMsgs]) {
+    pub async fn broadcast_dynamic_battery_msgs<T: BatteryMsgTrait>(&self, messages: &[BatteryMsgs<T>]) {
         for msg in messages {
             match msg {
                 BatteryMsgs::Acpi(BatteryMessage::CycleCount(_)) => self.fuel_gauge.rx.send(*msg).await,
@@ -69,13 +93,21 @@ impl<
                 BatteryMsgs::Acpi(BatteryMessage::RemainCap(_)) => self.fuel_gauge.rx.send(*msg).await,
                 BatteryMsgs::Acpi(BatteryMessage::PresentVolt(_)) => self.fuel_gauge.rx.send(*msg).await,
 
+                BatteryMsgs::OemGeneric(msg) => {
+                    if msg.is_charger_msg() {
+                        self.charger.rx.send(*msg).await
+                    } else {
+                        self.fuel_gauge.rx.send(*msg).await
+                    }
+                }
+
                 // More message support to be added.
                 _ => todo!(),
             }
         }
     }
 
-    fn handle_transport_msg(&self, msg: BatteryMsgs) -> Result<(), BatteryServiceErrors> {
+    fn handle_transport_msg<T: BatteryMsgTrait>(&self, msg: BatteryMsgs<T>) -> Result<(), BatteryServiceErrors> {
         match msg {
             BatteryMsgs::Acpi(msg) => match msg {
                 // Route to charger buffer or fuel gauge buffer
@@ -90,6 +122,7 @@ impl<
                     .map_err(|_| BatteryServiceErrors::BufferFull),
                 _ => todo!(),
             },
+            _ => unreachable!(),
         }
     }
 
@@ -126,26 +159,34 @@ impl<
         }
         Ok(())
     }
+
+    pub async fn get_oem_msg(&self) -> comms::Message {
+        self.oem_msg_signal.wait().await
+    }
 }
 
 impl<
+        'a,
         SmartCharger: embedded_batteries_async::charger::Charger,
         SmartBattery: embedded_batteries_async::smart_battery::SmartBattery,
-    > comms::MailboxDelegate for Service<SmartCharger, SmartBattery>
+    > comms::MailboxDelegate for Service<'a, SmartCharger, SmartBattery>
 {
-    fn receive(&self, message: &comms::Message) {
+    fn receive(&self, message: &comms::Message<'_>) {
         if let Some(msg) = message.data.get::<BatteryMessage>() {
             // Todo: Handle case where buffer is full.
-            if self.handle_transport_msg(BatteryMsgs::Acpi(*msg)).is_err() {
+            if self
+                .handle_transport_msg::<BatteryMessage>(BatteryMsgs::Acpi(*msg))
+                .is_err()
+            {
                 error!("Buffer full");
             }
-        }
-
-        if let Some(msg) = message.data.get::<OemMessage>() {
+        } else if let Some(msg) = message.data.get::<OemMessage>() {
             // Todo: Handle case where buffer is full.
-            if self.handle_transport_msg(BatteryMsgs::Oem(*msg)).is_err() {
+            if self.handle_transport_msg::<OemMessage>(BatteryMsgs::Oem(*msg)).is_err() {
                 error!("Buffer full");
             }
+        } else {
+            self.oem_msg_signal.signal(*message);
         }
     }
 }
@@ -158,7 +199,7 @@ impl<
 /// - fuel_gauge_task()
 #[macro_export]
 macro_rules! create_battery_service {
-    ($charger:ident, $charger_bus:path, $fuel_gauge:ident, $fuel_gauge_bus:path) => {
+    ($charger:ident, $charger_bus:path, $fuel_gauge:ident, $fuel_gauge_bus:path, $custom_msgs:ident) => {
         use ::battery_service::{BatteryServiceErrors, Service};
         use ::embedded_services::{comms, error};
         static SERVICE: OnceLock<Service<$charger<$charger_bus>, $fuel_gauge<$fuel_gauge_bus>>> = OnceLock::new();
