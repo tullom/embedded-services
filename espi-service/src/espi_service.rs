@@ -213,7 +213,7 @@ pub async fn espi_service(mut espi: espi::Espi<'static>, memory_map_buffer: &'st
             Ok(espi::Event::Port80) => {
                 info!("eSPI Port 80");
             }
-            Ok(espi::Event::WireChange) => {
+            Ok(espi::Event::WireChange(_)) => {
                 info!("eSPI WireChange");
             }
             Err(_) => {
