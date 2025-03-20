@@ -5,7 +5,8 @@ use embassy_futures::select::Either::{First, Second};
 use embedded_batteries_async::charger::{MilliAmps, MilliVolts};
 use embedded_services::comms::{self, External};
 use embedded_services::ec_type::message::BatteryMessage;
-use embedded_services::error;
+use embedded_services::power::policy::CommsMessage;
+use embedded_services::{error, info};
 
 mod charger;
 mod fuel_gauge;
@@ -134,6 +135,8 @@ impl<
     > comms::MailboxDelegate for Service<SmartCharger, SmartBattery>
 {
     fn receive(&self, message: &comms::Message) {
+        info!("Battery transport message received");
+
         if let Some(msg) = message.data.get::<BatteryMessage>() {
             // Todo: Handle case where buffer is full.
             if self.handle_transport_msg(BatteryMsgs::Acpi(*msg)).is_err() {
@@ -145,6 +148,28 @@ impl<
             // Todo: Handle case where buffer is full.
             if self.handle_transport_msg(BatteryMsgs::Oem(*msg)).is_err() {
                 error!("Buffer full");
+            }
+        }
+
+        if let Some(msg) = message.data.get::<CommsMessage>() {
+            match msg.data {
+                embedded_services::power::policy::CommsData::ConsumerDisconnected(device_id) => {
+                    info!("Consumer disconnected: {}", device_id.0);
+                    let res = self.charger.rx.try_send(BatteryMsgs::Oem(OemMessage::ChargeCurrent(0)));
+                    if res.is_err() {
+                        error!("Charger buffer full");
+                    }
+                }
+                embedded_services::power::policy::CommsData::ConsumerConnected(device_id, power_capability) => {
+                    info!("Consumer connected: {} {:?}", device_id.0, power_capability);
+                    let res = self
+                        .charger
+                        .rx
+                        .try_send(BatteryMsgs::Oem(OemMessage::ChargeCurrent(power_capability.current_ma)));
+                    if res.is_err() {
+                        error!("Charger buffer full");
+                    }
+                }
             }
         }
     }
