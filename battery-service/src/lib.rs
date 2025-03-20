@@ -199,7 +199,7 @@ macro_rules! create_battery_service {
 
         // Tasks
         #[embassy_executor::task]
-        async fn battery_service_task(spawner: Spawner) {
+        pub async fn battery_service_task(spawner: Spawner) {
             // Block until service is initialized
             let s = SERVICE.get().await;
 
