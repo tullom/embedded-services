@@ -2,6 +2,9 @@
 
 use embassy_futures::select::select;
 use embassy_futures::select::Either::{First, Second};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::signal::Signal;
+use embassy_time::Timer;
 use embedded_batteries_async::charger::{MilliAmps, MilliVolts};
 use embedded_services::comms::{self, External};
 use embedded_services::ec_type::message::BatteryMessage;
@@ -42,6 +45,7 @@ pub struct Service<
     pub endpoint: comms::Endpoint,
     pub charger: charger::Charger<SmartCharger>,
     pub fuel_gauge: fuel_gauge::FuelGauge<SmartBattery>,
+    policy_signal: Signal<NoopRawMutex, MilliAmps>,
 }
 
 impl<
@@ -54,6 +58,7 @@ impl<
             endpoint: comms::Endpoint::uninit(comms::EndpointID::Internal(comms::Internal::Battery)),
             charger: charger::Charger::new(smart_charger),
             fuel_gauge: fuel_gauge::FuelGauge::new(fuel_gauge),
+            policy_signal: Signal::new(),
         }
     }
 
@@ -123,9 +128,23 @@ impl<
                     .await
                     .unwrap();
             }
+            BatteryMsgs::Oem(_) => (),
             _ => todo!(),
         }
         Ok(())
+    }
+
+    pub async fn handle_new_power_policy(&self) {
+        let current = self.policy_signal.wait().await;
+        Timer::after_millis(1000).await;
+        let res = self
+            .charger
+            .rx
+            .try_send(BatteryMsgs::Oem(OemMessage::ChargeCurrent(current)));
+        if res.is_err() {
+            error!("Charger buffer full");
+        }
+        info!("SENT NEW CHARGE CURRENT");
     }
 }
 
@@ -142,16 +161,12 @@ impl<
             if self.handle_transport_msg(BatteryMsgs::Acpi(*msg)).is_err() {
                 error!("Buffer full");
             }
-        }
-
-        if let Some(msg) = message.data.get::<OemMessage>() {
+        } else if let Some(msg) = message.data.get::<OemMessage>() {
             // Todo: Handle case where buffer is full.
             if self.handle_transport_msg(BatteryMsgs::Oem(*msg)).is_err() {
                 error!("Buffer full");
             }
-        }
-
-        if let Some(msg) = message.data.get::<CommsMessage>() {
+        } else if let Some(msg) = message.data.get::<CommsMessage>() {
             match msg.data {
                 embedded_services::power::policy::CommsData::ConsumerDisconnected(device_id) => {
                     info!("Consumer disconnected: {}", device_id.0);
@@ -162,13 +177,8 @@ impl<
                 }
                 embedded_services::power::policy::CommsData::ConsumerConnected(device_id, power_capability) => {
                     info!("Consumer connected: {} {:?}", device_id.0, power_capability);
-                    let res = self
-                        .charger
-                        .rx
-                        .try_send(BatteryMsgs::Oem(OemMessage::ChargeCurrent(power_capability.current_ma)));
-                    if res.is_err() {
-                        error!("Charger buffer full");
-                    }
+                    info!("BATTERY: WAITING HALF SECOND");
+                    self.policy_signal.signal(power_capability.current_ma / 2);
                 }
             }
         }
@@ -205,6 +215,7 @@ macro_rules! create_battery_service {
 
             spawner.must_spawn(charger_task());
             spawner.must_spawn(fuel_gauge_task());
+            spawner.must_spawn(handle_power_policy_task());
 
             loop {
                 if let Err(e) = s.handle_charger_fuel_gauge_msg().await {
@@ -234,6 +245,16 @@ macro_rules! create_battery_service {
 
             loop {
                 s.fuel_gauge.process_service_message().await;
+            }
+        }
+
+        #[embassy_executor::task]
+        async fn handle_power_policy_task() {
+            // Block until service is initialized
+            let s = SERVICE.get().await;
+
+            loop {
+                s.handle_new_power_policy().await;
             }
         }
     };
