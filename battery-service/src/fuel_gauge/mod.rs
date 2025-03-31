@@ -133,6 +133,41 @@ impl<F: embedded_batteries_async::smart_battery::SmartBattery> FuelGauge<F> {
                     }
                     self.tx.send(res).await;
                 }
+                crate::BatteryMessage::LastFullCharge(_) => {
+                    let res = self
+                        .device
+                        .borrow_mut()
+                        .full_charge_capacity()
+                        .await
+                        .map(|f| BatteryMsgs::Acpi(crate::BatteryMessage::LastFullCharge(f.into())))
+                        .map_err(|_| FuelGaugeError::Bus);
+                }
+                crate::BatteryMessage::CycleCount(_) => {
+                    let res = self
+                        .device
+                        .borrow_mut()
+                        .cycle_count()
+                        .await
+                        .map(|f| BatteryMsgs::Acpi(crate::BatteryMessage::CycleCount(f.into())))
+                        .map_err(|_| FuelGaugeError::Bus);
+                }
+                crate::BatteryMessage::PsrState(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::PsrMaxOut(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::PsrMaxIn(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::PeakLevel(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::PeakPower(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::SusLevel(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::SusPower(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::PeakThres(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::SusThres(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::TripThres(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::BmcData(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::BmdData(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::BmdFlags(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::BmdCount(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::ChargeTime(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::RunTime(_) => { /* Get from Power Policy? */ }
+                crate::BatteryMessage::SampleTime(_) => { /* Get from Power Policy? */ }
                 _ => error!("Unexpected message sent to charger"),
             },
             BatteryMsgs::Oem(msg) => match msg {
