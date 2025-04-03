@@ -6,10 +6,16 @@ use crate::intrusive_list;
 
 use super::PowerCapability;
 
+/// Charger controller trait that device drivers may use to integrate with internal messaging system
 pub trait ChargeController: embedded_batteries_async::charger::Charger {
+    /// Type of error returned by the bus
     type BusError;
 
+    /// Returns with pending events
+    fn wait_event(&mut self) -> impl Future<Output = ChargerEvent>;
+    /// Initialize charger hardware, after this returns the charger should be ready to charge
     fn init_charger(&mut self) -> impl Future<Output = Result<(), Self::BusError>>;
+    /// Returns if the charger hardware detects if a PSU is attached
     fn is_psu_attached(&mut self) -> impl Future<Output = Result<bool, Self::BusError>>;
 }
 
@@ -18,7 +24,7 @@ pub trait ChargeController: embedded_batteries_async::charger::Charger {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ChargerId(pub u8);
 
-/// Charger Device ID new type
+/// OEM-specific state IDs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct OemStateId(pub u8);
@@ -30,7 +36,7 @@ pub enum ChargerEvent {
     /// Charger finished initialization sequence
     Initialized,
     /// PSU attached and we want to switch to it
-    PsuAttached(PowerCapability),
+    PsuAttached,
     /// PSU detached
     PsuDetached,
     /// A timeout of some sort was detected
@@ -39,6 +45,40 @@ pub enum ChargerEvent {
     BusError,
     /// OEM specific events
     Oem(OemStateId),
+}
+
+/// Charger state errors
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ChargerError {
+    /// Charger received command in an invalid state
+    InvalidState(State),
+    /// Charger hardware timed out responding
+    Timeout,
+    /// Charger underlying bus error
+    BusError,
+}
+
+/// Data for a device request
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum PolicyEvent {
+    /// Request to initialize charger hardware
+    InitRequest,
+    /// PSU attached and we want to switch to it
+    PolicyConfiguration(PowerCapability),
+    /// OEM specific events
+    Oem(OemStateId),
+}
+
+/// Data for a device request
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ChargerResponse {
+    /// Command completed
+    Ack,
+    /// Something went wrong
+    Nack(ChargerError),
 }
 
 /// Current state of the charger
@@ -50,18 +90,24 @@ pub enum State {
     /// Device is waiting for an event
     Idle,
     /// PSU is attached and device can charge if desired
-    PsuAttached(PowerCapability),
+    PsuAttached,
     /// PSU is detached
     PsuDetached,
-    /// Device is discharging battery
-    Unpowered,
     // TODO: Dead battery revival?
     /// OEM specific state(s)
     Oem(OemStateId),
 }
 
+/// Current state of the charger
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct InternalState {
+    pub state: State,
+    pub capability: Option<PowerCapability>,
+}
+
 /// Channel size for device requests
-pub const CHARGER_CHANNEL_SIZE: usize = 2;
+pub const CHARGER_CHANNEL_SIZE: usize = 1;
 
 /// Device struct
 pub struct Device {
@@ -70,11 +116,11 @@ pub struct Device {
     /// Device ID
     id: ChargerId,
     /// Current state of the device
-    state: Mutex<NoopRawMutex, State>,
+    state: Mutex<NoopRawMutex, InternalState>,
     /// Channel for requests to the device
-    events: Channel<NoopRawMutex, ChargerEvent, CHARGER_CHANNEL_SIZE>,
+    commands: Channel<NoopRawMutex, PolicyEvent, CHARGER_CHANNEL_SIZE>,
     // /// Channel for responses from the device
-    // response: Channel<NoopRawMutex, InternalResponseData, CHARGER_CHANNEL_SIZE>,
+    response: Channel<NoopRawMutex, ChargerResponse, CHARGER_CHANNEL_SIZE>,
 }
 
 impl Device {
@@ -83,9 +129,12 @@ impl Device {
         Self {
             node: intrusive_list::Node::uninit(),
             id,
-            state: Mutex::new(State::Init),
-            events: Channel::new(),
-            // response: Channel::new(),
+            state: Mutex::new(InternalState {
+                state: State::Init,
+                capability: None,
+            }),
+            commands: Channel::new(),
+            response: Channel::new(),
         }
     }
 
@@ -95,25 +144,36 @@ impl Device {
     }
 
     /// Returns the current state of the device
-    pub async fn state(&self) -> State {
+    pub async fn state(&self) -> InternalState {
         *self.state.lock().await
     }
 
     /// Set the state of the device
-    pub async fn set_state(&self, new_state: State) {
+    pub async fn set_state(&self, new_state: InternalState) {
         let mut lock = self.state.lock().await;
         let current_state = lock.deref_mut();
         *current_state = new_state;
     }
 
-    /// Wait for an event
-    pub async fn wait_event(&self) -> ChargerEvent {
-        self.events.receive().await
+    /// Wait for a command from policy
+    pub async fn wait_command(&self) -> PolicyEvent {
+        self.commands.receive().await
     }
 
-    /// Send a charger event, typically to change device state
-    pub async fn send_event(&self, event: ChargerEvent) {
-        self.events.send(event).await;
+    /// Send a command to the charger
+    pub async fn send_command(&self, policy_event: PolicyEvent) {
+        self.commands.send(policy_event).await
+    }
+
+    /// Send a response to the power policy
+    pub async fn send_response(&self, response: ChargerResponse) {
+        self.response.send(response).await
+    }
+
+    /// Send a command and wait for a response from the charger
+    pub async fn execute_command(&self, policy_event: PolicyEvent) -> ChargerResponse {
+        self.send_command(policy_event).await;
+        self.response.receive().await
     }
 }
 

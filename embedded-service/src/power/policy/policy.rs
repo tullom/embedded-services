@@ -115,7 +115,7 @@ pub async fn register_charger(device: &'static impl charger::ChargerContainer) -
         return Err(intrusive_list::Error::NodeAlreadyInList);
     }
 
-    CONTEXT.get().await.devices.push(device)
+    CONTEXT.get().await.chargers.push(device)
 }
 
 /// Find a device by its ID
@@ -161,6 +161,23 @@ pub(super) async fn send_request(from: DeviceId, request: RequestData) -> Result
     context.policy_response.receive().await
 }
 
+/// Initialize chargers in hardware
+pub async fn init_chargers() -> Result<ResponseData, Error> {
+    for charger in &CONTEXT.get().await.chargers {
+        if let Some(data) = charger.data::<charger::Device>() {
+            match data.execute_command(charger::PolicyEvent::InitRequest).await {
+                charger::ChargerResponse::Ack => continue,
+                charger::ChargerResponse::Nack(err) => match err {
+                    charger::ChargerError::InvalidState(_) => return Err(Error::Failed),
+                    charger::ChargerError::BusError => return Err(Error::Bus),
+                    charger::ChargerError::Timeout => return Err(Error::Failed),
+                },
+            }
+        }
+    }
+    Ok(ResponseData::Complete)
+}
+
 /// Singleton struct to give access to the power policy context
 pub struct ContextToken(());
 
@@ -174,6 +191,13 @@ impl ContextToken {
 
         INIT.store(true, Ordering::SeqCst);
         Some(ContextToken(()))
+    }
+
+    pub async fn init() -> Result<(), Error> {
+        // Initialize chargers
+        init_chargers().await?;
+
+        Ok(())
     }
 
     /// Wait for a power policy request
