@@ -1,13 +1,17 @@
 #![no_std]
 
+use context::BatterySequence;
 use embassy_futures::select::select;
 use embassy_futures::select::Either::{First, Second};
 use embedded_batteries_async::charger::{MilliAmps, MilliVolts};
 use embedded_services::comms::{self, External};
 use embedded_services::ec_type::message::BatteryMessage;
 
-mod charger;
 mod fuel_gauge;
+
+mod context;
+mod controller;
+mod device;
 
 /// Example OEM messages.
 /// True OEM messages should exist in OEM service, this is just an example.
@@ -33,122 +37,136 @@ pub enum BatteryServiceErrors {
     FuelGaugeBusError,
 }
 
-pub struct Service<
-    SmartCharger: embedded_batteries_async::charger::Charger,
-    SmartBattery: embedded_batteries_async::smart_battery::SmartBattery,
-> {
+pub struct Service<B: BatterySequence> {
     pub endpoint: comms::Endpoint,
-    pub charger: charger::Charger<SmartCharger>,
-    pub fuel_gauge: fuel_gauge::FuelGauge<SmartBattery>,
+    pub context: context::Context<B>,
 }
 
-impl<
-        SmartCharger: embedded_batteries_async::charger::Charger,
-        SmartBattery: embedded_batteries_async::smart_battery::SmartBattery,
-    > Service<SmartCharger, SmartBattery>
-{
-    pub fn new(smart_charger: SmartCharger, fuel_gauge: SmartBattery) -> Self {
+impl<B: BatterySequence> Service<B> {
+    pub fn new(oem: B) -> Self {
         Service {
             endpoint: comms::Endpoint::uninit(comms::EndpointID::Internal(comms::Internal::Battery)),
-            charger: charger::Charger::new(smart_charger),
-            fuel_gauge: fuel_gauge::FuelGauge::new(fuel_gauge),
+            context: context::Context::new(oem),
         }
     }
 
-    /// Function to request a variable amount of battery messages.
-    /// Intended to be called within a timer callback context, for example to get the voltage every 1 second.
-    pub async fn broadcast_dynamic_battery_msgs(&self, messages: &[BatteryMsgs]) {
-        for msg in messages {
-            match msg {
-                BatteryMsgs::Acpi(BatteryMessage::CycleCount(_)) => self.fuel_gauge.rx.send(*msg).await,
+    // /// Function to request a variable amount of battery messages.
+    // /// Intended to be called within a timer callback context, for example to get the voltage every 1 second.
+    // pub async fn broadcast_dynamic_battery_msgs(&self, messages: &[BatteryMsgs]) {
+    //     for msg in messages {
+    //         match msg {
+    //             BatteryMsgs::Acpi(BatteryMessage::CycleCount(_)) => self.fuel_gauge.rx.send(*msg).await,
 
-                // BST
-                BatteryMsgs::Acpi(BatteryMessage::State(_)) => self.fuel_gauge.rx.send(*msg).await,
-                BatteryMsgs::Acpi(BatteryMessage::PresentRate(_)) => self.fuel_gauge.rx.send(*msg).await,
-                BatteryMsgs::Acpi(BatteryMessage::RemainCap(_)) => self.fuel_gauge.rx.send(*msg).await,
-                BatteryMsgs::Acpi(BatteryMessage::PresentVolt(_)) => self.fuel_gauge.rx.send(*msg).await,
+    //             // BST
+    //             BatteryMsgs::Acpi(BatteryMessage::State(_)) => self.fuel_gauge.rx.send(*msg).await,
+    //             BatteryMsgs::Acpi(BatteryMessage::PresentRate(_)) => self.fuel_gauge.rx.send(*msg).await,
+    //             BatteryMsgs::Acpi(BatteryMessage::RemainCap(_)) => self.fuel_gauge.rx.send(*msg).await,
+    //             BatteryMsgs::Acpi(BatteryMessage::PresentVolt(_)) => self.fuel_gauge.rx.send(*msg).await,
 
-                // More message support to be added.
-                _ => todo!(),
-            }
-        }
-    }
+    //             // More message support to be added.
+    //             _ => todo!(),
+    //         }
+    //     }
+    // }
 
-    fn handle_transport_msg(&self, msg: BatteryMsgs) -> Result<(), BatteryServiceErrors> {
-        match msg {
-            BatteryMsgs::Acpi(msg) => match msg {
-                // Route to charger buffer or fuel gauge buffer
-                _ => todo!(),
-            },
-            BatteryMsgs::Oem(msg) => match msg {
-                // Route to charger buffer or fuel gauge buffer
-                OemMessage::ChargeVoltage(_) => self
-                    .charger
-                    .rx
-                    .try_send(BatteryMsgs::Oem(msg))
-                    .map_err(|_| BatteryServiceErrors::BufferFull),
-                _ => todo!(),
-            },
-        }
-    }
+    // fn handle_transport_msg(&self, msg: BatteryMsgs) -> Result<(), BatteryServiceErrors> {
+    //     match msg {
+    //         BatteryMsgs::Acpi(msg) => match msg {
+    //             // Route to charger buffer or fuel gauge buffer
+    //             _ => todo!(),
+    //         },
+    //         BatteryMsgs::Oem(msg) => match msg {
+    //             // Route to charger buffer or fuel gauge buffer
+    //             OemMessage::ChargeVoltage(_) => self
+    //                 .charger
+    //                 .rx
+    //                 .try_send(BatteryMsgs::Oem(msg))
+    //                 .map_err(|_| BatteryServiceErrors::BufferFull),
+    //             _ => todo!(),
+    //         },
+    //     }
+    // }
 
-    /// Function that handles responses from the charger and fuel gauge and sends messages over the endpoint.
-    pub async fn handle_charger_fuel_gauge_msg(&self) -> Result<(), BatteryServiceErrors> {
-        let charger_fut = self.charger.tx.receive();
-        let fuel_gauge_fut = self.fuel_gauge.tx.receive();
+    // /// Function that handles responses from the charger and fuel gauge and sends messages over the endpoint.
+    // pub async fn handle_charger_fuel_gauge_msg(&self) -> Result<(), BatteryServiceErrors> {
+    //     let charger_fut = self.charger.tx.receive();
+    //     let fuel_gauge_fut = self.fuel_gauge.tx.receive();
 
-        let msg = match select(charger_fut, fuel_gauge_fut).await {
-            First(res) => match res {
-                Ok(msg) => msg,
-                Err(e) => match e {
-                    charger::ChargerError::Bus => return Err(BatteryServiceErrors::ChargerBusError),
-                },
-            },
-            Second(res) => match res {
-                Ok(msg) => msg,
-                Err(e) => match e {
-                    fuel_gauge::FuelGaugeError::Bus => return Err(BatteryServiceErrors::FuelGaugeBusError),
-                },
-            },
-        };
+    //     let msg = match select(charger_fut, fuel_gauge_fut).await {
+    //         First(res) => match res {
+    //             Ok(msg) => msg,
+    //             Err(e) => match e {
+    //                 charger::ChargerError::Bus => return Err(BatteryServiceErrors::ChargerBusError),
+    //             },
+    //         },
+    //         Second(res) => match res {
+    //             Ok(msg) => msg,
+    //             Err(e) => match e {
+    //                 fuel_gauge::FuelGaugeError::Bus => return Err(BatteryServiceErrors::FuelGaugeBusError),
+    //             },
+    //         },
+    //     };
 
-        // Route the message over the comms service or the charger or fuel gauge.
-        // Individual messages can be handled in this match statement as exceptions.
-        match msg {
-            BatteryMsgs::Acpi(msg) => {
-                self.endpoint
-                    .send(comms::EndpointID::External(External::Host), &msg)
-                    .await
-                    .unwrap();
-            }
-            _ => todo!(),
-        }
+    //     // Route the message over the comms service or the charger or fuel gauge.
+    //     // Individual messages can be handled in this match statement as exceptions.
+    //     match msg {
+    //         BatteryMsgs::Acpi(msg) => {
+    //             self.endpoint
+    //                 .send(comms::EndpointID::External(External::Host), &msg)
+    //                 .await
+    //                 .unwrap();
+    //         }
+    //         _ => todo!(),
+    //     }
+    //     Ok(())
+    // }
+}
+
+impl<B: BatterySequence> comms::MailboxDelegate for Service<B> {
+    fn receive(&self, message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
+        // if let Some(msg) = message.data.get::<BatteryMessage>() {
+        //     self.handle_transport_msg(BatteryMsgs::Acpi(*msg))
+        //         .map_err(|e| match e {
+        //             BatteryServiceErrors::BufferFull => comms::MailboxDelegateError::BufferFull,
+        //             _ => comms::MailboxDelegateError::Other,
+        //         })?;
+        // } else if let Some(msg) = message.data.get::<OemMessage>() {
+        //     self.handle_transport_msg(BatteryMsgs::Oem(*msg)).map_err(|e| match e {
+        //         BatteryServiceErrors::BufferFull => comms::MailboxDelegateError::BufferFull,
+        //         _ => comms::MailboxDelegateError::Other,
+        //     })?;
+        // } else {
+        //     return Err(comms::MailboxDelegateError::MessageNotFound);
+        // }
+
         Ok(())
     }
 }
 
-impl<
-        SmartCharger: embedded_batteries_async::charger::Charger,
-        SmartBattery: embedded_batteries_async::smart_battery::SmartBattery,
-    > comms::MailboxDelegate for Service<SmartCharger, SmartBattery>
-{
-    fn receive(&self, message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
-        if let Some(msg) = message.data.get::<BatteryMessage>() {
-            self.handle_transport_msg(BatteryMsgs::Acpi(*msg))
-                .map_err(|e| match e {
-                    BatteryServiceErrors::BufferFull => comms::MailboxDelegateError::BufferFull,
-                    _ => comms::MailboxDelegateError::Other,
-                })?;
-        } else if let Some(msg) = message.data.get::<OemMessage>() {
-            self.handle_transport_msg(BatteryMsgs::Oem(*msg)).map_err(|e| match e {
-                BatteryServiceErrors::BufferFull => comms::MailboxDelegateError::BufferFull,
-                _ => comms::MailboxDelegateError::Other,
-            })?;
-        } else {
-            return Err(comms::MailboxDelegateError::MessageNotFound);
-        }
+// TODO: make macro
+#[embassy_executor::task]
+pub async fn task() {
+    // info!("Starting type-c task");
 
-        Ok(())
+    // let service = Service::new(oem_impl);
+    // let service = match service {
+    //     Some(service) => service,
+    //     None => {
+    //         error!("Type-C service already initialized");
+    //         return;
+    //     }
+    // };
+
+    // static SERVICE: OnceLock<Service> = OnceLock::new();
+    // let service = SERVICE.get_or_init(|| service);
+
+    // if comms::register_endpoint(service, &service.tp).await.is_err() {
+    //     error!("Failed to register type-c service endpoint");
+    //     return;
+    // }
+
+    loop {
+        // service.process().await;
     }
 }
 
