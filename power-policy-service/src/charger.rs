@@ -9,13 +9,13 @@ use embedded_services::{
     trace, warn,
 };
 
-pub struct Wrapper<C: ChargeController> {
-    charger_policy_state: charger::Device,
+pub struct Wrapper<'a, C: ChargeController> {
+    charger_policy_state: &'a charger::Device,
     controller: RefCell<C>,
 }
 
-impl<C: ChargeController> Wrapper<C> {
-    pub fn new(charger_policy_state: charger::Device, controller: C) -> Self {
+impl<'a, C: ChargeController> Wrapper<'a, C> {
+    pub fn new(charger_policy_state: &'a charger::Device, controller: C) -> Self {
         Self {
             charger_policy_state,
             controller: RefCell::new(controller),
