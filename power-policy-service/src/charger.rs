@@ -39,9 +39,12 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
         let state = self.get_state().await;
         match state.state {
             State::Init => match event {
-                ChargerEvent::Initialized => {
+                ChargerEvent::Initialized(psu_state) => {
                     self.set_state(InternalState {
-                        state: State::Idle,
+                        state: match psu_state {
+                            charger::PsuState::Attached => State::PsuAttached,
+                            charger::PsuState::Detached => State::PsuDetached,
+                        },
                         capability: state.capability,
                     })
                     .await
@@ -49,32 +52,8 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
                 // If we are initializing, we don't care about anything else
                 _ => (),
             },
-            State::Idle => match event {
-                ChargerEvent::PsuAttached => {
-                    self.set_state(InternalState {
-                        state: State::PsuAttached,
-                        capability: state.capability,
-                    })
-                    .await
-                }
-                ChargerEvent::PsuDetached => {
-                    self.set_state(InternalState {
-                        state: State::PsuDetached,
-                        capability: state.capability,
-                    })
-                    .await
-                }
-                ChargerEvent::Timeout => {
-                    self.set_state(InternalState {
-                        state: State::Idle,
-                        capability: None,
-                    })
-                    .await
-                }
-                _ => (),
-            },
             State::PsuAttached => match event {
-                ChargerEvent::PsuDetached => {
+                ChargerEvent::PsuStateChange(charger::PsuState::Detached) => {
                     self.set_state(InternalState {
                         state: State::PsuDetached,
                         capability: state.capability,
@@ -83,7 +62,7 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
                 }
                 ChargerEvent::Timeout => {
                     self.set_state(InternalState {
-                        state: State::Idle,
+                        state: State::Init,
                         capability: None,
                     })
                     .await
@@ -91,7 +70,7 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
                 _ => (),
             },
             State::PsuDetached => match event {
-                ChargerEvent::PsuAttached => {
+                ChargerEvent::PsuStateChange(charger::PsuState::Attached) => {
                     self.set_state(InternalState {
                         state: State::PsuAttached,
                         capability: state.capability,
@@ -100,14 +79,13 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
                 }
                 ChargerEvent::Timeout => {
                     self.set_state(InternalState {
-                        state: State::Idle,
+                        state: State::Init,
                         capability: None,
                     })
                     .await
                 }
                 _ => (),
             },
-            State::Oem(_id) => todo!(),
         }
     }
 
@@ -131,7 +109,6 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
                         Ok(charger::ChargerResponseData::Ack)
                     }
                 }
-                PolicyEvent::Oem(_oem_state_id) => todo!(),
                 PolicyEvent::InitRequest => {
                     error!("Charger received request to initialize but it's already initialized!");
                     Err(charger::ChargerError::InvalidState(state.state))
@@ -158,18 +135,6 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
                         }
                     }
                 }
-                PolicyEvent::Oem(_oem_state_id) => todo!(),
-                PolicyEvent::InitRequest => {
-                    error!("Charger received request to initialize but it's already initialized!");
-                    Err(charger::ChargerError::InvalidState(state.state))
-                }
-            },
-            State::Idle => match event {
-                PolicyEvent::PolicyConfiguration(_) => {
-                    warn!("Charger detected new power policy configuration but charger is still initializing.");
-                    Err(charger::ChargerError::InvalidState(state.state))
-                }
-                PolicyEvent::Oem(_oem_state_id) => todo!(),
                 PolicyEvent::InitRequest => {
                     error!("Charger received request to initialize but it's already initialized!");
                     Err(charger::ChargerError::InvalidState(state.state))
@@ -180,7 +145,6 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
                     warn!("Charger detected new power policy configuration but charger is still initializing.");
                     Err(charger::ChargerError::InvalidState(state.state))
                 }
-                PolicyEvent::Oem(_oem_state_id) => todo!(),
                 PolicyEvent::InitRequest => {
                     info!("Charger received request to initialize.");
                     if let Err(_err) = controller.init_charger().await {
@@ -190,7 +154,6 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
                     }
                 }
             },
-            State::Oem(_oem_state_id) => todo!(),
         };
 
         // Send response
