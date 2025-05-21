@@ -6,10 +6,6 @@ use embedded_services::{
         device::{CommandData, InternalResponseData},
         PowerCapability,
     },
-    type_c::{
-        POWER_CAPABILITY_5V_1A5, POWER_CAPABILITY_5V_3A0, POWER_CAPABILITY_USB_DEFAULT_USB2,
-        POWER_CAPABILITY_USB_DEFAULT_USB3,
-    },
 };
 use embedded_usb_pd::{GlobalPortId, PowerRole};
 
@@ -152,22 +148,6 @@ impl<const N: usize, C: Controller> ControllerWrapper<'_, N, C> {
                 error!("Error disabling sink path");
                 return PdError::Failed.into();
             }
-        } else if state == StateKind::ConnectedProvider {
-            info!("Port{}: Disconnect provider", port.0);
-            if controller.set_sourcing(port, false).await.is_err() {
-                error!("Error disabling source path");
-                return PdError::Failed.into();
-            }
-
-            // Don't signal since we're disconnected and just resetting to our default value
-            if controller
-                .set_source_current(port, DEFAULT_SOURCE_CURRENT, false)
-                .await
-                .is_err()
-            {
-                error!("Error setting source current to default");
-                return PdError::Failed.into();
-            }
         }
 
         Ok(())
@@ -178,25 +158,10 @@ impl<const N: usize, C: Controller> ControllerWrapper<'_, N, C> {
         &self,
         port: LocalPortId,
         capability: PowerCapability,
-        controller: &mut C,
+        _controller: &mut C,
     ) -> Result<(), Error<C::BusError>> {
         info!("Port{}: Connect provider: {:#?}", port.0, capability);
-        let current = match capability {
-            POWER_CAPABILITY_USB_DEFAULT_USB2 | POWER_CAPABILITY_USB_DEFAULT_USB3 => TypecCurrent::UsbDefault,
-            POWER_CAPABILITY_5V_1A5 => TypecCurrent::Current1A5,
-            POWER_CAPABILITY_5V_3A0 => TypecCurrent::Current3A0,
-            _ => {
-                error!("Invalid power capability");
-                return PdError::InvalidParams.into();
-            }
-        };
-
-        // Signal since we are supplying a different source current
-        if controller.set_source_current(port, current, true).await.is_err() {
-            error!("Error setting source capability");
-            return PdError::Failed.into();
-        }
-
+        // TODO: double check explicit contract handling
         Ok(())
     }
 

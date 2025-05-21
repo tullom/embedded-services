@@ -9,13 +9,11 @@ use embedded_services::power::policy::{self, action};
 use embedded_services::type_c::controller::{self, Controller, PortStatus};
 use embedded_services::type_c::event::{PortEventFlags, PortEventKind};
 use embedded_services::{error, info, trace, warn};
-use embedded_usb_pd::{type_c::Current as TypecCurrent, Error, PdError, PortId as LocalPortId};
+use embedded_usb_pd::{Error, PdError, PortId as LocalPortId};
 
 mod pd;
 mod power;
 
-/// Default current to source
-const DEFAULT_SOURCE_CURRENT: TypecCurrent = TypecCurrent::Current1A5;
 /// Threshold power capability before we'll attempt to sink from a dual-role supply
 /// This ensures we don't try to sink from something like a phone
 const DUAL_ROLE_CONSUMER_THRESHOLD_MW: u32 = 15000;
@@ -52,7 +50,7 @@ impl<'a, const N: usize, C: Controller> ControllerWrapper<'a, N, C> {
     /// Handle a plug event
     async fn process_plug_event(
         &self,
-        controller: &mut C,
+        _controller: &mut C,
         power: &policy::device::Device,
         port: LocalPortId,
         status: &PortStatus,
@@ -87,23 +85,6 @@ impl<'a, const N: usize, C: Controller> ControllerWrapper<'a, N, C> {
             }
         } else {
             info!("Plug removed");
-
-            // Reset source enable to default
-            if controller.set_sourcing(port, true).await.is_err() {
-                error!("Error setting source enable to default");
-                return PdError::Failed.into();
-            }
-
-            // Don't signal since we're disconnected and just resetting to our default value
-            if controller
-                .set_source_current(port, DEFAULT_SOURCE_CURRENT, false)
-                .await
-                .is_err()
-            {
-                error!("Error setting source current to default");
-                return PdError::Failed.into();
-            }
-
             if let Err(e) = power.detach().await {
                 error!("Error detaching power device: {:?}", e);
                 return PdError::Failed.into();

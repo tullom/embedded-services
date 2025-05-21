@@ -55,7 +55,6 @@ impl<'a, S: Kind> Policy<'a, S> {
             .await?
             .complete_or_err()?;
         self.device.set_state(device::State::Idle).await;
-        self.device.exit_recovery().await;
         Ok(())
     }
 
@@ -159,7 +158,6 @@ impl<'a> Policy<'a, ConnectedProvider> {
     pub async fn disconnect_no_timeout(self) -> Result<Policy<'a, Idle>, Error> {
         if let Err(e) = self.disconnect_internal_no_timeout().await {
             error!("Error disconnecting device {}: {:?}", self.device.id().0, e);
-            self.device.enter_recovery().await;
             return Err(e);
         }
         Ok(Policy::new(self.device))
