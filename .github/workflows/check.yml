@@ -202,7 +202,7 @@ jobs:
       - name: cargo check
         working-directory: ${{ matrix.example_directory }}
         run: |
-          cargo check --target thumbv8m.main-none-eabihf
+          cargo check --target thumbv8m.main-none-eabihf --locked
 
   check-std-examples:
     runs-on: ubuntu-latest
