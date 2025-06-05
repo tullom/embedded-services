@@ -4,7 +4,7 @@ use embassy_futures::select::select;
 use embedded_services::{
     debug, error, info,
     power::policy::charger::{
-        self, ChargeController, ChargerEvent, ChargerResponse, InternalState, PolicyEvent, State,
+        self, ChargeController, ChargerEvent, ChargerResponse, InternalState, PolicyEvent, PoweredSubstate, State,
     },
     trace, warn,
 };
@@ -38,53 +38,55 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
     async fn process_controller_event(&self, _controller: &mut C, event: ChargerEvent) {
         let state = self.get_state().await;
         match state.state {
-            State::Init => match event {
-                ChargerEvent::Initialized(psu_state) => {
-                    self.set_state(InternalState {
-                        state: match psu_state {
-                            charger::PsuState::Attached => State::PsuAttached,
-                            charger::PsuState::Detached => State::PsuDetached,
-                        },
-                        capability: state.capability,
-                    })
-                    .await
-                }
-                // If we are initializing, we don't care about anything else
-                _ => (),
-            },
-            State::PsuAttached => match event {
-                ChargerEvent::PsuStateChange(charger::PsuState::Detached) => {
-                    self.set_state(InternalState {
-                        state: State::PsuDetached,
-                        capability: state.capability,
-                    })
-                    .await
-                }
-                ChargerEvent::Timeout => {
-                    self.set_state(InternalState {
-                        state: State::Init,
-                        capability: None,
-                    })
-                    .await
-                }
-                _ => (),
-            },
-            State::PsuDetached => match event {
-                ChargerEvent::PsuStateChange(charger::PsuState::Attached) => {
-                    self.set_state(InternalState {
-                        state: State::PsuAttached,
-                        capability: state.capability,
-                    })
-                    .await
-                }
-                ChargerEvent::Timeout => {
-                    self.set_state(InternalState {
-                        state: State::Init,
-                        capability: None,
-                    })
-                    .await
-                }
-                _ => (),
+            State::Powered(powered_substate) => match powered_substate {
+                PoweredSubstate::Init => match event {
+                    ChargerEvent::Initialized(psu_state) => {
+                        self.set_state(InternalState {
+                            state: match psu_state {
+                                charger::PsuState::Attached => State::Powered(PoweredSubstate::PsuAttached),
+                                charger::PsuState::Detached => State::Powered(PoweredSubstate::PsuDetached),
+                            },
+                            capability: state.capability,
+                        })
+                        .await
+                    }
+                    // If we are initializing, we don't care about anything else
+                    _ => (),
+                },
+                PoweredSubstate::PsuAttached => match event {
+                    ChargerEvent::PsuStateChange(charger::PsuState::Detached) => {
+                        self.set_state(InternalState {
+                            state: State::Powered(PoweredSubstate::PsuDetached),
+                            capability: state.capability,
+                        })
+                        .await
+                    }
+                    ChargerEvent::Timeout => {
+                        self.set_state(InternalState {
+                            state: State::Powered(PoweredSubstate::Init),
+                            capability: None,
+                        })
+                        .await
+                    }
+                    _ => (),
+                },
+                PoweredSubstate::PsuDetached => match event {
+                    ChargerEvent::PsuStateChange(charger::PsuState::Attached) => {
+                        self.set_state(InternalState {
+                            state: State::Powered(PoweredSubstate::PsuAttached),
+                            capability: state.capability,
+                        })
+                        .await
+                    }
+                    ChargerEvent::Timeout => {
+                        self.set_state(InternalState {
+                            state: State::Powered(PoweredSubstate::Init),
+                            capability: None,
+                        })
+                        .await
+                    }
+                    _ => (),
+                },
             },
         }
     }
@@ -93,7 +95,7 @@ impl<'a, C: ChargeController> Wrapper<'a, C> {
         let state = self.get_state().await;
         let res: ChargerResponse = match event {
             PolicyEvent::InitRequest => {
-                if state.state == State::Init {
+                if state.state == State::Powered(PoweredSubstate::Init) {
                     info!("Charger received request to initialize.");
                 } else {
                     warn!("Charger received request to initialize but it's already initialized! Reinitializing...");

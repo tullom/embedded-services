@@ -23,6 +23,10 @@ pub trait ChargeController: embedded_batteries_async::charger::Charger {
     /// Called after power policy detaches from a power port, either to switch consumers,
     /// or because PSU was disconnected.
     fn detach_handler(&mut self) -> impl Future<Output = Result<(), Self::BusError>>;
+    ///
+    fn ping(&mut self) -> impl Future<Output = Result<(), Self::BusError>> {
+        core::future::ready(Ok(()))
+    }
 }
 
 /// Charger Device ID new type
@@ -90,8 +94,10 @@ impl From<ChargerError> for power::policy::Error {
 pub enum PolicyEvent {
     /// Request to initialize charger hardware
     InitRequest,
-    /// PSU attached and we want to switch to it
+    /// New power policy detected
     PolicyConfiguration(PowerCapability),
+    /// Request to ping the charger hardware
+    Ping,
 }
 
 /// Data for a device request
@@ -109,13 +115,22 @@ pub type ChargerResponse = Result<ChargerResponseData, ChargerError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum State {
+    /// Device is unpowered
+    Unpowered,
+    /// Device is powered
+    Powered(PoweredSubstate),
+}
+
+/// Powered state substates
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum PoweredSubstate {
     /// Device is initializing
     Init,
     /// PSU is attached and device can charge if desired
     PsuAttached,
     /// PSU is detached
     PsuDetached,
-    // TODO: Dead battery revival?
 }
 
 /// Current state of the charger
@@ -152,7 +167,7 @@ impl Device {
             node: intrusive_list::Node::uninit(),
             id,
             state: Mutex::new(InternalState {
-                state: State::Init,
+                state: State::Unpowered,
                 capability: None,
             }),
             commands: Channel::new(),
