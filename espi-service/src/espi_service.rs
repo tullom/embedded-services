@@ -218,7 +218,7 @@ pub async fn espi_service(mut espi: espi::Espi<'static>, memory_map_buffer: &'st
 
                     match result {
                         Ok(dest_slice) => {
-                            dest_slice.copy_from_slice(src_slice);
+                            dest_slice[..src_slice.len()].copy_from_slice(src_slice);
                         }
                         Err(_e) => {
                             #[cfg(feature = "defmt")]
