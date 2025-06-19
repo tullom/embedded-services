@@ -144,10 +144,16 @@ impl CfuDevice {
     pub async fn state(&self) -> InternalState {
         *self.state.lock().await
     }
+
+    /// Send a request to this device
+    pub async fn send_request(&self, request: RequestData) {
+        self.request.send(request).await;
+    }
+
     /// Sends a request to this device and returns a response
     pub async fn execute_device_request(&self, request: RequestData) -> Result<InternalResponseData, CfuProtocolError> {
-        self.request.send(request).await;
-        Ok(self.response.receive().await)
+        self.send_request(request).await;
+        Ok(self.wait_response().await)
     }
 
     /// Wait for a request
@@ -158,6 +164,11 @@ impl CfuDevice {
     /// Send a response
     pub async fn send_response(&self, response: InternalResponseData) {
         self.response.send(response).await;
+    }
+
+    /// Waits for a response
+    pub async fn wait_response(&self) -> InternalResponseData {
+        self.response.receive().await
     }
 }
 

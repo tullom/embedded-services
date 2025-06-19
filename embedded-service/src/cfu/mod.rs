@@ -114,6 +114,25 @@ pub async fn route_request(to: ComponentId, request: RequestData) -> Result<Inte
         .map_err(CfuError::ProtocolError)
 }
 
+/// Send a request to the specific CFU device, but don't wait for a response
+pub async fn send_device_request(to: ComponentId, request: RequestData) -> Result<(), CfuError> {
+    let device = get_device(to).await;
+    if device.is_none() {
+        return Err(CfuError::InvalidComponent);
+    }
+    device.unwrap().send_request(request).await;
+    Ok(())
+}
+
+/// Wait for a response from the specific CFU device
+pub async fn wait_device_response(to: ComponentId) -> Result<InternalResponseData, CfuError> {
+    let device = get_device(to).await;
+    if device.is_none() {
+        return Err(CfuError::InvalidComponent);
+    }
+    Ok(device.unwrap().wait_response().await)
+}
+
 /// Singleton struct to give access to the cfu client context
 pub struct ContextToken(());
 

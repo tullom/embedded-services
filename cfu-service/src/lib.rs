@@ -6,6 +6,7 @@ use embedded_services::cfu::component::*;
 use embedded_services::cfu::{CfuError, ContextToken};
 use embedded_services::{comms, error, info};
 
+pub mod buffer;
 pub mod host;
 pub mod splitter;
 
