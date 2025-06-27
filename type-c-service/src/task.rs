@@ -83,7 +83,7 @@ impl Service {
         event: PortEventKind,
         status: PortStatus,
     ) -> Result<(), Error> {
-        let old_status = self.get_cached_port_status(port_id)?;
+        let old_status = self.get_cached_port_status(port_id).await?;
 
         debug!("Port{}: Event: {:#?}", port_id.0, event);
         debug!("Port{} Previous status: {:#?}", port_id.0, old_status);
@@ -219,7 +219,6 @@ impl Service {
     }
 
     /// Wait for port flags
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn wait_port_flags(&self) -> PortEventFlagsIter {
         let mut state = self.state.lock().await;
         if state.event_iter.is_some() {
@@ -233,7 +232,6 @@ impl Service {
     }
 
     /// Wait for the next event
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn wait_next(&self) -> Result<Event<'_>, Error> {
         loop {
             match select(self.wait_port_flags(), self.context.wait_external_command()).await {

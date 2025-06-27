@@ -1,7 +1,7 @@
-use core::cell::RefCell;
-
 use embassy_futures::select::select;
+use embassy_sync::mutex::Mutex;
 use embedded_services::trace;
+use embedded_services::GlobalRawMutex;
 
 use crate::{
     controller::{Controller, ControllerEvent},
@@ -11,7 +11,7 @@ use crate::{
 /// Wrapper object to bind device to fuel gauge hardware driver.
 pub struct Wrapper<'a, C: Controller> {
     device: &'a Device,
-    controller: RefCell<C>,
+    controller: Mutex<GlobalRawMutex, C>,
 }
 
 impl<'a, C: Controller> Wrapper<'a, C> {
@@ -22,14 +22,13 @@ impl<'a, C: Controller> Wrapper<'a, C> {
 
         Self {
             device,
-            controller: RefCell::new(controller),
+            controller: Mutex::new(controller),
         }
     }
 
     /// Process events from hardware controller or context device.
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn process(&self) {
-        let mut controller = self.controller.borrow_mut();
+        let mut controller = self.controller.lock().await;
         loop {
             let res = select(controller.get_device_event(), self.device.receive_command()).await;
             match res {

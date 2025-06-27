@@ -1,4 +1,5 @@
-use core::cell::RefCell;
+use embassy_sync::mutex::Mutex;
+use embedded_services::GlobalRawMutex;
 
 use embassy_futures::select::select;
 use embedded_services::{
@@ -14,7 +15,7 @@ where
     charger::ChargerError: From<<C as ChargeController>::ChargeControllerError>,
 {
     charger_policy_state: &'a charger::Device,
-    controller: RefCell<C>,
+    controller: Mutex<GlobalRawMutex, C>,
 }
 
 impl<'a, C: ChargeController> Wrapper<'a, C>
@@ -24,7 +25,7 @@ where
     pub fn new(charger_policy_state: &'a charger::Device, controller: C) -> Self {
         Self {
             charger_policy_state,
-            controller: RefCell::new(controller),
+            controller: Mutex::new(controller),
         }
     }
 
@@ -223,9 +224,8 @@ where
         self.charger_policy_state.send_response(res).await;
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn process(&self) {
-        let mut controller = self.controller.borrow_mut();
+        let mut controller = self.controller.lock().await;
         loop {
             let res = select(controller.wait_event(), self.wait_policy_command()).await;
             match res {

@@ -1,15 +1,17 @@
 //! This module contains the `Controller` trait. Any types that implement this trait can be used with the `ControllerWrapper` struct
 //! which provides a bridge between various service messages and the actual controller functions.
 use core::array::from_fn;
-use core::cell::{Cell, RefCell};
 
 use embassy_futures::select::{select4, select_array, Either4};
+use embassy_sync::mutex::Mutex;
 use embedded_cfu_protocol::protocol_definitions::{FwUpdateOffer, FwUpdateOfferResponse, FwVersion};
 use embedded_services::cfu::component::CfuDevice;
 use embedded_services::power::policy::device::StateKind;
 use embedded_services::power::policy::{self, action};
+use embedded_services::sync_cell::SyncCell;
 use embedded_services::type_c::controller::{self, Controller, PortStatus};
 use embedded_services::type_c::event::{PortEventFlags, PortEventKind};
+use embedded_services::GlobalRawMutex;
 use embedded_services::{debug, error, info, trace, warn};
 use embedded_usb_pd::{Error, PdError, PortId as LocalPortId};
 
@@ -60,9 +62,9 @@ pub struct ControllerWrapper<'a, const N: usize, C: Controller, V: FwOfferValida
     /// CFU device to interface with firmware update service
     cfu_device: CfuDevice,
     /// Internal state for the wrapper
-    state: RefCell<InternalState>,
-    controller: RefCell<C>,
-    active_events: [Cell<PortEventKind>; N],
+    state: Mutex<GlobalRawMutex, InternalState>,
+    controller: Mutex<GlobalRawMutex, C>,
+    active_events: [SyncCell<PortEventKind>; N],
     /// Trait object for validating firmware versions
     fw_version_validator: V,
 }
@@ -80,9 +82,9 @@ impl<'a, const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'
             pd_controller,
             power,
             cfu_device,
-            state: RefCell::new(Default::default()),
-            controller: RefCell::new(controller),
-            active_events: [const { Cell::new(PortEventKind::none()) }; N],
+            state: Mutex::new(Default::default()),
+            controller: Mutex::new(controller),
+            active_events: [const { SyncCell::new(PortEventKind::none()) }; N],
             fw_version_validator,
         }
     }
@@ -226,10 +228,9 @@ impl<'a, const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'
     }
 
     /// Top-level processing function
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn process(&self) {
-        let mut controller = self.controller.borrow_mut();
-        let mut state = self.state.borrow_mut();
+        let mut controller = self.controller.lock().await;
+        let mut state = self.state.lock().await;
         match select4(
             controller.wait_port_event(),
             self.wait_power_command(),

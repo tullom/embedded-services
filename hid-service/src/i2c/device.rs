@@ -1,9 +1,10 @@
 use core::borrow::BorrowMut;
-use core::cell::{Cell, RefCell};
 
+use embassy_sync::mutex::Mutex;
 use embedded_hal_async::i2c::{AddressMode, I2c};
-use embedded_services::buffer::*;
 use embedded_services::hid::{DeviceContainer, Opcode, Response};
+use embedded_services::sync_cell::SyncCell;
+use embedded_services::{buffer::*, GlobalRawMutex};
 use embedded_services::{error, hid, info, trace};
 
 use crate::Error;
@@ -12,8 +13,8 @@ pub struct Device<A: AddressMode + Copy, B: I2c<A>> {
     device: hid::Device,
     buffer: OwnedRef<'static, u8>,
     address: A,
-    descriptor: Cell<Option<hid::Descriptor>>,
-    bus: RefCell<B>,
+    descriptor: SyncCell<Option<hid::Descriptor>>,
+    bus: Mutex<GlobalRawMutex, B>,
 }
 
 impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
@@ -22,18 +23,17 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
             device: hid::Device::new(id, regs),
             buffer,
             address,
-            descriptor: Cell::new(None),
-            bus: RefCell::new(bus),
+            descriptor: SyncCell::new(None),
+            bus: Mutex::new(bus),
         }
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn get_hid_descriptor(&self) -> Result<hid::Descriptor, Error<B::Error>> {
         if self.descriptor.get().is_some() {
             return Ok(self.descriptor.get().unwrap());
         }
 
-        let mut bus = self.bus.borrow_mut();
+        let mut bus = self.bus.lock().await;
         let mut borrow = self.buffer.borrow_mut();
         let mut reg = [0u8; 2];
         let buf: &mut [u8] = borrow.borrow_mut();
@@ -68,7 +68,6 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         Ok(self.buffer.reference().slice(0..len))
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn read_report_descriptor(&self) -> Result<SharedRef<'static, u8>, Error<B::Error>> {
         info!("Sending report descriptor");
 
@@ -78,7 +77,7 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         let reg = desc.w_report_desc_register.to_le_bytes();
         let len = desc.w_report_desc_length as usize;
 
-        let mut bus = self.bus.borrow_mut();
+        let mut bus = self.bus.lock().await;
         if let Err(e) = bus.write_read(self.address, &reg, &mut buf[0..len]).await {
             error!("Failed to read report descriptor");
             return Err(Error::Bus(e));
@@ -87,7 +86,6 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         Ok(self.buffer.reference().slice(0..len))
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn handle_input_report(&self) -> Result<SharedRef<'static, u8>, Error<B::Error>> {
         info!("Handling input report");
         let desc = self.get_hid_descriptor().await?;
@@ -96,7 +94,7 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         let buf: &mut [u8] = borrow.borrow_mut();
         let buf = &mut buf[0..desc.w_max_input_length as usize];
 
-        let mut bus = self.bus.borrow_mut();
+        let mut bus = self.bus.lock().await;
         if let Err(e) = bus.read(self.address, buf).await {
             error!("Failed to read input report");
             return Err(Error::Bus(e));
@@ -105,7 +103,6 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         Ok(self.buffer.reference().slice(0..desc.w_max_input_length as usize))
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn handle_command(
         &self,
         cmd: &hid::Command<'static>,
@@ -131,7 +128,7 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         }
 
         let len = res.unwrap();
-        let mut bus = self.bus.borrow_mut();
+        let mut bus = self.bus.lock().await;
         if let Err(e) = bus.write(self.address, &buf[..len]).await {
             error!("Failed to write command");
             return Err(Error::Bus(e));
