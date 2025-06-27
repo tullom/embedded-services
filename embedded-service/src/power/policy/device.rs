@@ -1,12 +1,11 @@
 //! Device struct and methods
 use core::ops::DerefMut;
 
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 
 use super::{action, DeviceId, Error, PowerCapability};
-use crate::intrusive_list;
 use crate::ipc::deferred;
+use crate::{intrusive_list, GlobalRawMutex};
 
 /// Most basic device states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,9 +116,9 @@ pub struct Device {
     /// Device ID
     id: DeviceId,
     /// Current state of the device
-    state: Mutex<NoopRawMutex, InternalState>,
+    state: Mutex<GlobalRawMutex, InternalState>,
     /// Command channel
-    command: deferred::Channel<NoopRawMutex, CommandData, InternalResponseData>,
+    command: deferred::Channel<GlobalRawMutex, CommandData, InternalResponseData>,
 }
 
 impl Device {
@@ -181,7 +180,7 @@ impl Device {
     }
 
     /// Create a handler for the command channel
-    pub async fn receive(&self) -> deferred::Request<'_, NoopRawMutex, CommandData, InternalResponseData> {
+    pub async fn receive(&self) -> deferred::Request<'_, GlobalRawMutex, CommandData, InternalResponseData> {
         self.command.receive().await
     }
 

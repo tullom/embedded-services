@@ -1,7 +1,6 @@
 //! Device struct and methods for component communication
 use core::future::Future;
 
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embedded_cfu_protocol::components::{CfuComponentInfo, CfuComponentStorage, CfuComponentTraits};
@@ -12,6 +11,7 @@ use heapless::Vec;
 use super::CfuError;
 use crate::cfu::route_request;
 use crate::intrusive_list;
+use crate::GlobalRawMutex;
 
 /// Component internal update state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,9 +101,9 @@ pub const DEVICE_CHANNEL_SIZE: usize = 1;
 pub struct CfuDevice {
     node: intrusive_list::Node,
     component_id: ComponentId,
-    state: Mutex<NoopRawMutex, InternalState>,
-    request: Channel<NoopRawMutex, RequestData, DEVICE_CHANNEL_SIZE>,
-    response: Channel<NoopRawMutex, InternalResponseData, DEVICE_CHANNEL_SIZE>,
+    state: Mutex<GlobalRawMutex, InternalState>,
+    request: Channel<GlobalRawMutex, RequestData, DEVICE_CHANNEL_SIZE>,
+    response: Channel<GlobalRawMutex, InternalResponseData, DEVICE_CHANNEL_SIZE>,
 }
 
 impl intrusive_list::NodeContainer for CfuDevice {
@@ -179,7 +179,7 @@ pub struct CfuComponentDefault<W: CfuWriter> {
     is_primary: bool,
     storage_offset: usize,
     subcomponents: [Option<ComponentId>; MAX_SUBCMPT_COUNT],
-    writer: Mutex<NoopRawMutex, W>,
+    writer: Mutex<GlobalRawMutex, W>,
 }
 
 impl<W: CfuWriter + Default> Default for CfuComponentDefault<W> {

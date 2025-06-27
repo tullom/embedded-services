@@ -1,20 +1,17 @@
-use core::cell::{Cell, RefCell};
-
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::signal::Signal;
+use embassy_sync::{mutex::Mutex, signal::Signal};
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::digital::Wait;
-use embedded_services::trace;
+use embedded_services::{sync_cell::SyncCell, trace, GlobalRawMutex};
 
 /// This struct manages interrupt signal passthrough
 /// When an interrupt from the device occurs the interrupt to the host is assert
 /// The interrupt will be deasserted when we receive a request from the host
 /// We then ignore any further device interrupts until the response is sent to the host
 pub struct InterruptSignal<IN: Wait, OUT: OutputPin> {
-    state: Cell<InterruptState>,
-    int_in: RefCell<IN>,
-    int_out: RefCell<OUT>,
-    signal: Signal<NoopRawMutex, ()>,
+    state: SyncCell<InterruptState>,
+    int_in: Mutex<GlobalRawMutex, IN>,
+    int_out: Mutex<GlobalRawMutex, OUT>,
+    signal: Signal<GlobalRawMutex, ()>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,9 +25,9 @@ enum InterruptState {
 impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
     pub fn new(int_in: IN, int_out: OUT) -> Self {
         Self {
-            state: Cell::new(InterruptState::Idle),
-            int_in: RefCell::new(int_in),
-            int_out: RefCell::new(int_out),
+            state: SyncCell::new(InterruptState::Idle),
+            int_in: Mutex::new(int_in),
+            int_out: Mutex::new(int_out),
             signal: Signal::new(),
         }
     }
@@ -57,7 +54,6 @@ impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
         self.signal.signal(());
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn process(&self) {
         let mut int_in = self.int_in.borrow_mut();
         let mut int_out = self.int_out.borrow_mut();

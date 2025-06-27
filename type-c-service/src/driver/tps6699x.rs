@@ -1,6 +1,6 @@
 use core::array::from_fn;
-use core::cell::{Cell, RefCell};
 use core::iter::zip;
+use core::ops::DerefMut;
 
 use ::tps6699x::registers::field_sets::IntEventBus1;
 use ::tps6699x::registers::{PdCcPullUp, PpExtVbusSw, PpIntVbusSw};
@@ -8,16 +8,18 @@ use ::tps6699x::{PORT0, PORT1, TPS66993_NUM_PORTS, TPS66994_NUM_PORTS};
 use bitfield::bitfield;
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::RawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::Delay;
 use embedded_cfu_protocol::protocol_definitions::ComponentId;
 use embedded_hal_async::i2c::I2c;
 use embedded_services::cfu::component::CfuDevice;
 use embedded_services::power::policy::{self, PowerCapability};
+use embedded_services::sync_cell::SyncCell;
 use embedded_services::type_c::controller::{self, Controller, ControllerStatus, PortStatus};
 use embedded_services::type_c::event::PortEventKind;
 use embedded_services::type_c::ControllerId;
-use embedded_services::{debug, info, trace, type_c, warn};
+use embedded_services::{debug, info, trace, type_c, warn, GlobalRawMutex};
 use embedded_usb_pd::pdinfo::PowerPathStatus;
 use embedded_usb_pd::pdo::{sink, source, Common, Rdo};
 use embedded_usb_pd::type_c::Current as TypecCurrent;
@@ -45,11 +47,11 @@ struct FwUpdateState<'a, M: RawMutex, B: I2c> {
 }
 
 pub struct Tps6699x<'a, const N: usize, M: RawMutex, B: I2c> {
-    port_events: [Cell<PortEventKind>; N],
-    port_status: [Cell<PortStatus>; N],
+    port_events: [SyncCell<PortEventKind>; N],
+    port_status: [SyncCell<PortStatus>; N],
     sw_event: Signal<M, ()>,
-    tps6699x: RefCell<tps6699x_drv::Tps6699x<'a, M, B>>,
-    update_state: RefCell<Option<FwUpdateState<'a, M, B>>>,
+    tps6699x: Mutex<GlobalRawMutex, tps6699x_drv::Tps6699x<'a, M, B>>,
+    update_state: Mutex<GlobalRawMutex, Option<FwUpdateState<'a, M, B>>>,
     /// Firmware update configuration
     fw_update_config: FwUpdateConfig,
 }
@@ -57,11 +59,11 @@ pub struct Tps6699x<'a, const N: usize, M: RawMutex, B: I2c> {
 impl<'a, const N: usize, M: RawMutex, B: I2c> Tps6699x<'a, N, M, B> {
     pub fn new(tps6699x: tps6699x_drv::Tps6699x<'a, M, B>, fw_update_config: FwUpdateConfig) -> Self {
         Self {
-            port_events: [const { Cell::new(PortEventKind::none()) }; N],
-            port_status: [const { Cell::new(PortStatus::new()) }; N],
+            port_events: [const { SyncCell::new(PortEventKind::none()) }; N],
+            port_status: [const { SyncCell::new(PortStatus::new()) }; N],
             sw_event: Signal::new(),
-            tps6699x: RefCell::new(tps6699x),
-            update_state: RefCell::new(None),
+            tps6699x: Mutex::new(tps6699x),
+            update_state: Mutex::new(None),
             fw_update_config,
         }
     }
@@ -227,11 +229,11 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     type BusError = B::Error;
 
     /// Controller specific initialization
-    #[allow(clippy::await_holding_refcell_ref)]
+
     async fn sync_state(&mut self) -> Result<(), Error<Self::BusError>> {
         for i in 0..N {
             let port = LocalPortId(i as u8);
-            let mut tps6699x = self.tps6699x.borrow_mut();
+            let mut tps6699x = self.tps6699x.lock().await;
             let event = self.update_port_status(&mut tps6699x, port).await?;
             self.signal_event(port, event);
         }
@@ -240,9 +242,9 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     }
 
     /// Wait for an event on any port
-    #[allow(clippy::await_holding_refcell_ref)]
+
     async fn wait_port_event(&mut self) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         let _ = select(self.wait_interrupt_event(&mut tps6699x), self.wait_sw_event()).await;
 
         for (i, cell) in self.port_events.iter().enumerate() {
@@ -268,8 +270,9 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         if port.0 >= self.port_events.len() as u8 {
             return PdError::InvalidPort.into();
         }
-
-        Ok(self.port_events[port.0 as usize].replace(PortEventKind::none()))
+        let port_events = self.port_events[port.0 as usize].get();
+        self.port_events[port.0 as usize].set(PortEventKind::none());
+        Ok(port_events)
     }
 
     /// Returns the current status of the port
@@ -284,12 +287,11 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         Ok(self.port_status[port.0 as usize].get())
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn get_rt_fw_update_status(
         &mut self,
         port: LocalPortId,
     ) -> Result<type_c::controller::RetimerFwUpdateState, Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         match tps6699x.get_rt_fw_update_status(port).await {
             Ok(true) => Ok(type_c::controller::RetimerFwUpdateState::Active),
             Ok(false) => Ok(type_c::controller::RetimerFwUpdateState::Inactive),
@@ -297,28 +299,24 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         }
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn set_rt_fw_update_state(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         tps6699x.set_rt_fw_update_state(port).await
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn clear_rt_fw_update_state(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         tps6699x.clear_rt_fw_update_state(port).await
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn set_rt_compliance(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         tps6699x.set_rt_compliance(port).await
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn enable_sink_path(&mut self, port: LocalPortId, enable: bool) -> Result<(), Error<Self::BusError>> {
         debug!("Port{} enable sink path: {}", port.0, enable);
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         match tps6699x.enable_sink_path(port, enable).await {
             // Temporary workaround for autofet rejection
             // Tracking bug: https://github.com/OpenDevicePartnership/embedded-services/issues/268
@@ -330,9 +328,8 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         }
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn get_controller_status(&mut self) -> Result<ControllerStatus<'static>, Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         let boot_flags = tps6699x.get_boot_flags().await?;
         let customer_use = CustomerUse(tps6699x.get_customer_use().await?);
 
@@ -345,16 +342,14 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         })
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn get_active_fw_version(&self) -> Result<u32, Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         let customer_use = CustomerUse(tps6699x.get_customer_use().await?);
         Ok(customer_use.custom_fw_version())
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn start_fw_update(&mut self) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         let mut delay = Delay;
         let mut updater: BorrowedUpdater<tps6699x_drv::Tps6699x<'_, M, B>> =
             BorrowedUpdater::with_config(self.fw_update_config.clone());
@@ -371,25 +366,29 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         let in_progress = updater.start_fw_update(&mut [&mut tps6699x], &mut delay).await?;
         // Re-enable interrupts on port 0 only
         enable_port0_interrupts::<tps6699x_drv::Tps6699x<'_, M, B>>(&mut [&mut tps6699x], &mut guards[0..1]).await?;
-        self.update_state.replace(Some(FwUpdateState {
+        let mut state = self.update_state.lock().await;
+        *state = Some(FwUpdateState {
             updater: in_progress,
             guards,
-        }));
+        });
         Ok(())
     }
 
     /// Aborts the firmware update in progress
     ///
     /// This can reset the controller
-    #[allow(clippy::await_holding_refcell_ref)]
+
     async fn abort_fw_update(&mut self) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         // Check if we're still in firmware update mode
         if tps6699x.get_mode().await? == tps6699x::Mode::F211 {
             let mut delay = Delay;
-            if let Some(update) = self.update_state.replace(None) {
+            let mut state = self.update_state.lock().await;
+            if let Some(update) = state.deref_mut() {
                 // Attempt to abort the firmware update by consuming our update object
-                update.updater.abort_fw_update(&mut [&mut tps6699x], &mut delay).await;
+                (&mut update.updater)
+                    .abort_fw_update(&mut [&mut tps6699x], &mut delay)
+                    .await;
                 Ok(())
             } else {
                 // Bypass our update object since we've gotten into a state where we don't have one
@@ -404,9 +403,9 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     /// Finalize the firmware update
     ///
     /// This will reset the controller
-    #[allow(clippy::await_holding_refcell_ref)]
+
     async fn finalize_fw_update(&mut self) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         if let Some(update) = self.update_state.replace(None) {
             let mut delay = Delay;
             update
@@ -418,9 +417,8 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         }
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn write_fw_contents(&mut self, _offset: usize, data: &[u8]) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.borrow_mut();
+        let mut tps6699x = self.tps6699x.lock().await;
         let mut update_state = self.update_state.borrow_mut();
         if let Some(update) = update_state.as_mut() {
             let mut delay = Delay;

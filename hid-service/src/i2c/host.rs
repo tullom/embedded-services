@@ -1,13 +1,13 @@
 //! I2C<->HID bridge
 use core::borrow::{Borrow, BorrowMut};
-use core::cell::RefCell;
 
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{with_timeout, Duration};
 use embedded_services::buffer::OwnedRef;
 use embedded_services::comms::{self, Endpoint, EndpointID, External, MailboxDelegate};
 use embedded_services::hid::{self, DeviceId, Opcode};
+use embedded_services::GlobalRawMutex;
 use embedded_services::{error, trace};
 
 use super::{Command as I2cCommand, I2cSlaveAsync};
@@ -25,9 +25,9 @@ pub enum Access {
 pub struct Host<B: I2cSlaveAsync> {
     id: DeviceId,
     pub tp: Endpoint,
-    response: Signal<NoopRawMutex, Option<hid::Response<'static>>>,
+    response: Signal<GlobalRawMutex, Option<hid::Response<'static>>>,
     buffer: OwnedRef<'static, u8>,
-    bus: RefCell<B>,
+    bus: Mutex<GlobalRawMutex, B>,
 }
 
 impl<B: I2cSlaveAsync> Host<B> {
@@ -37,13 +37,12 @@ impl<B: I2cSlaveAsync> Host<B> {
             tp: Endpoint::uninit(EndpointID::External(External::Host)),
             response: Signal::new(),
             buffer,
-            bus: RefCell::new(bus),
+            bus: Mutex::new(bus),
         }
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn read_bus(&self, timeout_ms: u64, buffer: &mut [u8]) -> Result<(), Error<B::Error>> {
-        let mut bus = self.bus.borrow_mut();
+        let mut bus = self.bus.lock().await;
         let result = with_timeout(Duration::from_millis(timeout_ms), bus.respond_to_write(buffer)).await;
         if result.is_err() {
             error!("Response timeout");
@@ -58,9 +57,8 @@ impl<B: I2cSlaveAsync> Host<B> {
         Ok(())
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn write_bus(&self, timeout_ms: u64, buffer: &[u8]) -> Result<(), Error<B::Error>> {
-        let mut bus = self.bus.borrow_mut();
+        let mut bus = self.bus.lock().await;
         // Send response, timeout if the host doesn't read so we don't get stuck here
         trace!("Sending {} bytes", buffer.len());
         let result = with_timeout(Duration::from_millis(timeout_ms), bus.respond_to_read(buffer)).await;
@@ -199,10 +197,9 @@ impl<B: I2cSlaveAsync> Host<B> {
     }
 
     /// Process a request from the host
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn wait_request(&self) -> Result<Access, Error<B::Error>> {
         // Wait for HID register address
-        let mut bus = self.bus.borrow_mut();
+        let mut bus = self.bus.lock().await;
         loop {
             trace!("Waiting for host");
             match bus.listen().await {
@@ -226,7 +223,6 @@ impl<B: I2cSlaveAsync> Host<B> {
         }
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn send_response(&self) -> Result<(), Error<B::Error>> {
         if let Some(response) = self.response.wait().await {
             match response {
@@ -240,7 +236,7 @@ impl<B: I2cSlaveAsync> Host<B> {
             // Wait for the read from the host
             // Input reports just a read so we don't need to wait for one
             if !matches!(response, hid::Response::InputReport(_)) {
-                let mut bus = self.bus.borrow_mut();
+                let mut bus = self.bus.lock().await;
                 match bus.listen().await {
                     Err(e) => {
                         error!("Bus error");
