@@ -2,7 +2,7 @@
 
 use embassy_sync::once_lock::OnceLock;
 
-use crate::{intrusive_list::*, sync_cell::SyncCell};
+use crate::{intrusive_list::*, SyncCell};
 
 /// potential activity service states
 #[derive(Copy, Clone, Debug)]

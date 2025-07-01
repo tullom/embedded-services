@@ -27,6 +27,7 @@ impl<'a, C: Controller> Wrapper<'a, C> {
     }
 
     /// Process events from hardware controller or context device.
+    /// Only call this fn ONCE, it will infinitely loop processing messages. Otherwise a deadlock could occur.
     pub async fn process(&self) {
         let mut controller = self.controller.lock().await;
         loop {

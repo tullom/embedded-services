@@ -8,10 +8,10 @@ use embedded_cfu_protocol::protocol_definitions::{FwUpdateOffer, FwUpdateOfferRe
 use embedded_services::cfu::component::CfuDevice;
 use embedded_services::power::policy::device::StateKind;
 use embedded_services::power::policy::{self, action};
-use embedded_services::sync_cell::SyncCell;
 use embedded_services::type_c::controller::{self, Controller, PortStatus};
 use embedded_services::type_c::event::{PortEventFlags, PortEventKind};
 use embedded_services::GlobalRawMutex;
+use embedded_services::SyncCell;
 use embedded_services::{debug, error, info, trace, warn};
 use embedded_usb_pd::{Error, PdError, PortId as LocalPortId};
 
@@ -228,6 +228,7 @@ impl<'a, const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'
     }
 
     /// Top-level processing function
+    /// Only call this fn from one place in a loop. Otherwise a deadlock could occur.
     pub async fn process(&self) {
         let mut controller = self.controller.lock().await;
         let mut state = self.state.lock().await;

@@ -3,7 +3,7 @@
 // Any type used for dynamic type coercion
 pub use core::any::Any;
 
-use crate::sync_cell::SyncCell;
+use crate::SyncCell;
 
 /// Interface error class information
 #[derive(Copy, Clone, Debug)]

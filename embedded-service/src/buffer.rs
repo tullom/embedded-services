@@ -15,7 +15,7 @@ use core::borrow::{Borrow, BorrowMut};
 use core::marker::PhantomData;
 use core::ops::Range;
 
-use crate::sync_cell::SyncCell;
+use crate::SyncCell;
 use core::sync::atomic::AtomicPtr;
 
 #[derive(Copy, Clone, PartialEq, Eq)]

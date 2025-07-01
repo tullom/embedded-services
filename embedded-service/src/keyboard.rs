@@ -1,10 +1,11 @@
 //! Keyboard service data types and common functionality
 
+use embassy_sync::mutex::Mutex;
 use embassy_sync::once_lock::OnceLock;
 
 use crate::buffer::SharedRef;
 use crate::comms::{self, EndpointID, External, Internal};
-use crate::sync_cell::SyncCell;
+use crate::GlobalRawMutex;
 
 /// Keyboard device ID
 #[derive(Debug, Clone, Copy)]
@@ -60,7 +61,7 @@ pub struct BroadcastConfig {
 
 /// Keyboard service context
 struct Context {
-    broadcast_config: SyncCell<BroadcastConfig>,
+    broadcast_config: Mutex<GlobalRawMutex, BroadcastConfig>,
 }
 
 static CONTEXT: OnceLock<Context> = OnceLock::new();
@@ -68,7 +69,7 @@ static CONTEXT: OnceLock<Context> = OnceLock::new();
 /// Initialize common keyboard service functionality
 pub fn init() {
     CONTEXT.get_or_init(|| Context {
-        broadcast_config: SyncCell::new(BroadcastConfig::default()),
+        broadcast_config: Mutex::new(BroadcastConfig::default()),
     });
 }
 
@@ -76,18 +77,16 @@ pub fn init() {
 pub async fn enable_broadcast_host() {
     let context = CONTEXT.get().await;
 
-    let mut config = context.broadcast_config.get();
+    let mut config = context.broadcast_config.lock().await;
     config.broadcast_host = true;
-    context.broadcast_config.set(config);
 }
 
 /// Enable broadcasting messages to the HID endpoint
 pub async fn enable_broadcast_hid() {
     let context = CONTEXT.get().await;
 
-    let mut config = context.broadcast_config.get();
+    let mut config = context.broadcast_config.lock().await;
     config.broadcast_hid = true;
-    context.broadcast_config.set(config);
 }
 
 /// Broadcast a keyboard message to the specified endpoints
@@ -115,6 +114,6 @@ pub async fn broadcast_message_with_config(from: DeviceId, config: BroadcastConf
 
 /// Broadcast a keyboard message using the global broadcast config
 pub async fn broadcast_message(from: DeviceId, data: MessageData<'static>) {
-    let config = CONTEXT.get().await.broadcast_config.get();
+    let config = *CONTEXT.get().await.broadcast_config.lock().await;
     broadcast_message_with_config(from, config, data).await;
 }

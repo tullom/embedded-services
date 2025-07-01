@@ -1,7 +1,7 @@
 use embassy_sync::{mutex::Mutex, signal::Signal};
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::digital::Wait;
-use embedded_services::{sync_cell::SyncCell, trace, GlobalRawMutex};
+use embedded_services::{trace, GlobalRawMutex, SyncCell};
 
 /// This struct manages interrupt signal passthrough
 /// When an interrupt from the device occurs the interrupt to the host is assert
@@ -55,8 +55,8 @@ impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
     }
 
     pub async fn process(&self) {
-        let mut int_in = self.int_in.borrow_mut();
-        let mut int_out = self.int_out.borrow_mut();
+        let mut int_in = self.int_in.lock().await;
+        let mut int_out = self.int_out.lock().await;
 
         trace!("Waiting for interrupt");
 

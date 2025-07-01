@@ -6,7 +6,7 @@
 pub mod intrusive_list;
 pub use intrusive_list::*;
 
-pub mod sync_cell;
+pub mod critical_section_cell;
 
 /// short-hand include all pre-baked services
 pub mod activity;
@@ -36,6 +36,12 @@ pub type GlobalRawMutex = embassy_sync::blocking_mutex::raw::CriticalSectionRawM
 /// but CriticalSectionRawMutex would incur a significant performance impact, since it disables interrupts.
 #[cfg(all(not(test), target_os = "none"))]
 pub type GlobalRawMutex = embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+
+/// A cell type that is Sync and Send. CriticalSectionCell is used in a standard context to support multiple cores and
+/// executors, whereas ThreadModeCell is leaner and used in a microcontroller context for when there's a guarantee of a
+/// single core and executor.
+// #[cfg(any(test, not(target_os = "none")))]
+pub type SyncCell<T> = critical_section_cell::CriticalSectionCell<T>;
 
 /// initialize all service static interfaces as required. Ideally, this is done before subsystem initialization
 pub async fn init() {
