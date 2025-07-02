@@ -1,14 +1,14 @@
 use embassy_sync::{mutex::Mutex, signal::Signal};
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::digital::Wait;
-use embedded_services::{trace, GlobalRawMutex, SyncCell};
+use embedded_services::{trace, GlobalRawMutex};
 
 /// This struct manages interrupt signal passthrough
 /// When an interrupt from the device occurs the interrupt to the host is assert
 /// The interrupt will be deasserted when we receive a request from the host
 /// We then ignore any further device interrupts until the response is sent to the host
 pub struct InterruptSignal<IN: Wait, OUT: OutputPin> {
-    state: SyncCell<InterruptState>,
+    state: Mutex<GlobalRawMutex, InterruptState>,
     int_in: Mutex<GlobalRawMutex, IN>,
     int_out: Mutex<GlobalRawMutex, OUT>,
     signal: Signal<GlobalRawMutex, ()>,
@@ -25,7 +25,7 @@ enum InterruptState {
 impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
     pub fn new(int_in: IN, int_out: OUT) -> Self {
         Self {
-            state: SyncCell::new(InterruptState::Idle),
+            state: Mutex::new(InterruptState::Idle),
             int_in: Mutex::new(int_in),
             int_out: Mutex::new(int_out),
             signal: Signal::new(),
@@ -33,24 +33,27 @@ impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
     }
 
     /// Deassert the interrupt signal
-    pub fn deassert(&self) {
-        if self.state.get() == InterruptState::Asserted {
-            self.state.set(InterruptState::Waiting);
+    pub async fn deassert(&self) {
+        let mut state = self.state.lock().await;
+        if *state == InterruptState::Asserted {
+            *state = InterruptState::Waiting;
             self.signal.signal(());
         }
     }
 
     /// Release the interrupt signal, allowing device interrupts to passthrough again
-    pub fn release(&self) {
-        if self.state.get() == InterruptState::Waiting {
-            self.state.set(InterruptState::Idle);
+    pub async fn release(&self) {
+        let mut state = self.state.lock().await;
+        if *state == InterruptState::Waiting {
+            *state = InterruptState::Idle;
             self.signal.signal(());
         }
     }
 
     /// Deassert and release the interrupt signal
-    pub fn reset(&self) {
-        self.state.set(InterruptState::Reset);
+    pub async fn reset(&self) {
+        let mut state = self.state.lock().await;
+        *state = InterruptState::Reset;
         self.signal.signal(());
     }
 
@@ -63,20 +66,30 @@ impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
         int_in.wait_for_low().await.unwrap();
 
         int_out.set_low().unwrap();
-        self.state.set(InterruptState::Asserted);
+        {
+            let mut state = self.state.lock().await;
+            *state = InterruptState::Asserted;
+        }
         trace!("Interrupt received");
 
         self.signal.wait().await;
         int_out.set_high().unwrap();
         trace!("Interrupt deasserted");
 
-        if self.state.get() == InterruptState::Reset {
-            self.state.set(InterruptState::Idle);
-            return;
+        {
+            let mut state = self.state.lock().await;
+            if *state == InterruptState::Reset {
+                *state = InterruptState::Idle;
+                return;
+            }
         }
 
         self.signal.wait().await;
-        self.state.set(InterruptState::Idle);
+
+        {
+            let mut state = self.state.lock().await;
+            *state = InterruptState::Idle;
+        }
         trace!("Interrupt cleared");
     }
 }

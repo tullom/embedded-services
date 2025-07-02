@@ -17,7 +17,6 @@ use embedded_services::power::policy::{self, PowerCapability};
 use embedded_services::type_c::controller::{self, Controller, ControllerStatus, PortStatus};
 use embedded_services::type_c::event::PortEventKind;
 use embedded_services::type_c::ControllerId;
-use embedded_services::SyncCell;
 use embedded_services::{debug, info, trace, type_c, warn, GlobalRawMutex};
 use embedded_usb_pd::pdinfo::PowerPathStatus;
 use embedded_usb_pd::pdo::{sink, source, Common, Rdo};
@@ -46,8 +45,8 @@ struct FwUpdateState<'a, M: RawMutex, B: I2c> {
 }
 
 pub struct Tps6699x<'a, const N: usize, M: RawMutex, B: I2c> {
-    port_events: [SyncCell<PortEventKind>; N],
-    port_status: [SyncCell<PortStatus>; N],
+    port_events: [Mutex<GlobalRawMutex, PortEventKind>; N],
+    port_status: [Mutex<GlobalRawMutex, PortStatus>; N],
     sw_event: Signal<M, ()>,
     tps6699x: Mutex<GlobalRawMutex, tps6699x_drv::Tps6699x<'a, M, B>>,
     update_state: Mutex<GlobalRawMutex, Option<FwUpdateState<'a, M, B>>>,
@@ -58,8 +57,8 @@ pub struct Tps6699x<'a, const N: usize, M: RawMutex, B: I2c> {
 impl<'a, const N: usize, M: RawMutex, B: I2c> Tps6699x<'a, N, M, B> {
     pub fn new(tps6699x: tps6699x_drv::Tps6699x<'a, M, B>, fw_update_config: FwUpdateConfig) -> Self {
         Self {
-            port_events: [const { SyncCell::new(PortEventKind::none()) }; N],
-            port_status: [const { SyncCell::new(PortStatus::new()) }; N],
+            port_events: [const { Mutex::new(PortEventKind::none()) }; N],
+            port_status: [const { Mutex::new(PortStatus::new()) }; N],
             sw_event: Signal::new(),
             tps6699x: Mutex::new(tps6699x),
             update_state: Mutex::new(None),
@@ -158,7 +157,7 @@ impl<'a, const N: usize, M: RawMutex, B: I2c> Tps6699x<'a, N, M, B> {
             debug!("Port{} power path: {:#?}", port.0, port_status.power_path);
         }
 
-        self.port_status[port.0 as usize].set(port_status);
+        *self.port_status[port.0 as usize].lock().await = port_status;
         Ok(events)
     }
 
@@ -169,39 +168,39 @@ impl<'a, const N: usize, M: RawMutex, B: I2c> Tps6699x<'a, N, M, B> {
     ) -> Result<(), Error<B::Error>> {
         let interrupts = tps6699x.wait_interrupt(false, |_, _| true).await;
 
-        for (interrupt, cell) in zip(interrupts.iter(), self.port_events.iter()) {
+        for (interrupt, mutex) in zip(interrupts.iter(), self.port_events.iter()) {
             if *interrupt == IntEventBus1::new_zero() {
                 continue;
             }
 
-            let mut event = cell.get();
-            if interrupt.plug_event() {
-                debug!("Event: Plug event");
-                event.set_plug_inserted_or_removed(true);
-            }
-            if interrupt.source_caps_received() {
-                debug!("Event: Source Caps received");
-                event.set_source_caps_received(true);
-            }
+            {
+                let mut event = mutex.lock().await;
+                if interrupt.plug_event() {
+                    debug!("Event: Plug event");
+                    event.set_plug_inserted_or_removed(true);
+                }
+                if interrupt.source_caps_received() {
+                    debug!("Event: Source Caps received");
+                    event.set_source_caps_received(true);
+                }
 
-            if interrupt.sink_ready() {
-                debug!("Event: Sink ready");
-                event.set_sink_ready(true);
-            }
+                if interrupt.sink_ready() {
+                    debug!("Event: Sink ready");
+                    event.set_sink_ready(true);
+                }
 
-            if interrupt.new_consumer_contract() {
-                debug!("Event: New contract as consumer, PD controller act as Sink");
-                // Port is consumer and power negotiation is complete
-                event.set_new_power_contract_as_consumer(true);
-            }
+                if interrupt.new_consumer_contract() {
+                    debug!("Event: New contract as consumer, PD controller act as Sink");
+                    // Port is consumer and power negotiation is complete
+                    event.set_new_power_contract_as_consumer(true);
+                }
 
-            if interrupt.new_provider_contract() {
-                debug!("Event: New contract as provider, PD controller act as source");
-                // Port is provider and power negotiation is complete
-                event.set_new_power_contract_as_provider(true);
+                if interrupt.new_provider_contract() {
+                    debug!("Event: New contract as provider, PD controller act as source");
+                    // Port is provider and power negotiation is complete
+                    event.set_new_power_contract_as_provider(true);
+                }
             }
-
-            cell.set(event);
         }
         Ok(())
     }
@@ -212,14 +211,16 @@ impl<'a, const N: usize, M: RawMutex, B: I2c> Tps6699x<'a, N, M, B> {
     }
 
     /// Signal an event on the given port
-    fn signal_event(&self, port: LocalPortId, event: PortEventKind) {
+    async fn signal_event(&self, port: LocalPortId, event: PortEventKind) {
         if port.0 >= self.port_events.len() as u8 {
             return;
         }
 
-        let cell = &self.port_events[port.0 as usize];
-        let current = cell.get();
-        cell.set(current.union(event));
+        {
+            let mut guard = self.port_events[port.0 as usize].lock().await;
+            let current = *guard;
+            *guard = current.union(event);
+        }
         self.sw_event.signal(());
     }
 }
@@ -233,7 +234,7 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
             let port = LocalPortId(i as u8);
             let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
             let event = self.update_port_status(&mut tps6699x, port).await?;
-            self.signal_event(port, event);
+            self.signal_event(port, event).await;
         }
 
         Ok(())
@@ -244,10 +245,12 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
         let _ = select(self.wait_interrupt_event(&mut tps6699x), self.wait_sw_event()).await;
 
-        for (i, cell) in self.port_events.iter().enumerate() {
+        for (i, mutex) in self.port_events.iter().enumerate() {
             let port = LocalPortId(i as u8);
 
-            let event = cell.get().union(self.update_port_status(&mut tps6699x, port).await?);
+            let mut guard = mutex.lock().await;
+
+            let event = guard.union(self.update_port_status(&mut tps6699x, port).await?);
 
             // TODO: We get interrupts for certain status changes that don't currently map to a generic port event
             // Enable this when those get fleshed out
@@ -257,7 +260,7 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
             }*/
 
             trace!("Port{} event: {:#?}", i, event);
-            cell.set(event);
+            *guard = event;
         }
         Ok(())
     }
@@ -267,8 +270,9 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         if port.0 >= self.port_events.len() as u8 {
             return PdError::InvalidPort.into();
         }
-        let port_events = self.port_events[port.0 as usize].get();
-        self.port_events[port.0 as usize].set(PortEventKind::none());
+        let mut guard = self.port_events[port.0 as usize].lock().await;
+        let port_events = *guard;
+        *guard = PortEventKind::none();
         Ok(port_events)
     }
 
@@ -281,7 +285,7 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
             return PdError::InvalidPort.into();
         }
 
-        Ok(self.port_status[port.0 as usize].get())
+        Ok(*self.port_status[port.0 as usize].lock().await)
     }
 
     async fn get_rt_fw_update_status(

@@ -3,7 +3,6 @@ use core::borrow::BorrowMut;
 use embassy_sync::mutex::Mutex;
 use embedded_hal_async::i2c::{AddressMode, I2c};
 use embedded_services::hid::{DeviceContainer, Opcode, Response};
-use embedded_services::SyncCell;
 use embedded_services::{buffer::*, GlobalRawMutex};
 use embedded_services::{error, hid, info, trace};
 
@@ -13,7 +12,7 @@ pub struct Device<A: AddressMode + Copy, B: I2c<A>> {
     device: hid::Device,
     buffer: OwnedRef<'static, u8>,
     address: A,
-    descriptor: SyncCell<Option<hid::Descriptor>>,
+    descriptor: Mutex<GlobalRawMutex, Option<hid::Descriptor>>,
     bus: Mutex<GlobalRawMutex, B>,
 }
 
@@ -23,16 +22,18 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
             device: hid::Device::new(id, regs),
             buffer,
             address,
-            descriptor: SyncCell::new(None),
+            descriptor: Mutex::new(None),
             bus: Mutex::new(bus),
         }
     }
 
     async fn get_hid_descriptor(&self) -> Result<hid::Descriptor, Error<B::Error>> {
-        if self.descriptor.get().is_some() {
-            return Ok(self.descriptor.get().unwrap());
+        {
+            let descriptor = self.descriptor.lock().await;
+            if descriptor.is_some() {
+                return Ok(descriptor.unwrap());
+            }
         }
-
         let mut bus = self.bus.lock().await;
         let mut borrow = self.buffer.borrow_mut();
         let mut reg = [0u8; 2];
@@ -52,7 +53,10 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         }
         let desc = res.unwrap();
         info!("HID descriptor: {:#?}", desc);
-        self.descriptor.set(Some(desc));
+        {
+            let mut descriptor = self.descriptor.lock().await;
+            *descriptor = Some(desc);
+        }
 
         Ok(desc)
     }
