@@ -38,9 +38,18 @@ pub enum OperationalSubstate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum BatteryEventInner {
+    /// Send this command to initialize or re-initialize the state machine.
     DoInit,
+    /// Send this command while in the Present(Operational(Polling)) state to request the fuel gauge to poll dynamic data.
     PollDynamicData,
+    /// Send this command while in the Present(Operational(Init)) or Present(Operational(Polling)) state to request the fuel gauge to poll static data.
     PollStaticData,
+    /// Send this command while in any state to put the state machine into the Present(NotOperational) state.
+    /// The state machine will ping the FG and if the ping succeeds, the state machine will drop into the
+    /// Present(Operational(Init)) state, where you can send PollStaticData to get it into a polling state.
+    /// If there is a failure, this command can be sent multiple times. Once enough failures have occured, the state
+    /// machine will send a NoOpRecoveryFailed error and will drop into the NotPresent state. At that point, the state
+    /// machine must be reinitialized with a DoInit command.
     Timeout,
     Oem(u8, &'static [u8]),
 }
@@ -59,6 +68,7 @@ pub enum StateMachineError {
     DeviceTimeout,
     DeviceError,
     InvalidActionInState,
+    NoOpRecoveryFailed,
 }
 
 /// External battery state machine response.  
@@ -211,8 +221,10 @@ impl Context {
                 }
             }
             BatteryEventInner::PollStaticData => {
-                if *state != State::Present(PresentSubstate::Operational(OperationalSubstate::Polling)) {
-                    error!("Battery Service: received static poll request while not in polling state");
+                if *state != State::Present(PresentSubstate::Operational(OperationalSubstate::Init))
+                    && *state != State::Present(PresentSubstate::Operational(OperationalSubstate::Polling))
+                {
+                    error!("Battery Service: received static poll request while not in operational state");
                     trace!("State = {:?}", *state);
                     Err(StateMachineError::InvalidActionInState)
                 } else {
@@ -221,8 +233,12 @@ impl Context {
             }
             BatteryEventInner::Timeout => {
                 warn!("Battery Service: received timeout command");
-                trace!("State = {:?}", *state);
-                Ok(State::Present(PresentSubstate::NotOperational))
+                if *state == State::NotPresent {
+                    error!("Battery Service: received timeout command when battery is not present! Re-initialize the battery instead.");
+                    Err(StateMachineError::InvalidActionInState)
+                } else {
+                    Ok(State::Present(PresentSubstate::NotOperational))
+                }
             }
             BatteryEventInner::Oem(_, _items) => todo!(),
         }
@@ -281,10 +297,11 @@ impl Context {
                                 event.device_id, fg_err
                             );
                             // Do not continue execution, if we got to this point it's because we errored.
-                            // Require re-executing manual CheckReady calls. If we go over the max retries,
+                            // Require re-executing manual Timeout calls. If we go over the max retries,
                             // transition to the NotPresent state.
                             if self.get_state_machine_retry_count() > self.get_state_machine_max_retries() {
                                 *state = State::NotPresent;
+                                return Err(StateMachineError::NoOpRecoveryFailed);
                             }
                             Err(StateMachineError::DeviceTimeout)
                         }
@@ -294,10 +311,11 @@ impl Context {
                                 ctx_err, event.device_id
                             );
                             // Do not continue execution, if we got to this point it's because we errored.
-                            // Require re-executing manual CheckReady calls. If we go over the max retries,
+                            // Require re-executing manual Timeout calls. If we go over the max retries,
                             // transition to the NotPresent state.
                             if self.get_state_machine_retry_count() > self.get_state_machine_max_retries() {
                                 *state = State::NotPresent;
+                                return Err(StateMachineError::NoOpRecoveryFailed);
                             }
                             Err(StateMachineError::DeviceTimeout)
                         }
