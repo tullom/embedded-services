@@ -232,8 +232,14 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     async fn sync_state(&mut self) -> Result<(), Error<Self::BusError>> {
         for i in 0..N {
             let port = LocalPortId(i as u8);
-            let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
-            let event = self.update_port_status(&mut tps6699x, port).await?;
+            let event: PortEventKind;
+            {
+                let mut tps6699x = self
+                    .tps6699x
+                    .try_lock()
+                    .expect("Driver should not have been locked before this, thus infallible");
+                event = self.update_port_status(&mut tps6699x, port).await?;
+            }
             self.signal_event(port, event).await;
         }
 
@@ -242,7 +248,10 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
 
     /// Wait for an event on any port
     async fn wait_port_event(&mut self) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         let _ = select(self.wait_interrupt_event(&mut tps6699x), self.wait_sw_event()).await;
 
         for (i, mutex) in self.port_events.iter().enumerate() {
@@ -292,7 +301,10 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         &mut self,
         port: LocalPortId,
     ) -> Result<type_c::controller::RetimerFwUpdateState, Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         match tps6699x.get_rt_fw_update_status(port).await {
             Ok(true) => Ok(type_c::controller::RetimerFwUpdateState::Active),
             Ok(false) => Ok(type_c::controller::RetimerFwUpdateState::Inactive),
@@ -301,23 +313,35 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     }
 
     async fn set_rt_fw_update_state(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         tps6699x.set_rt_fw_update_state(port).await
     }
 
     async fn clear_rt_fw_update_state(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         tps6699x.clear_rt_fw_update_state(port).await
     }
 
     async fn set_rt_compliance(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         tps6699x.set_rt_compliance(port).await
     }
 
     async fn enable_sink_path(&mut self, port: LocalPortId, enable: bool) -> Result<(), Error<Self::BusError>> {
         debug!("Port{} enable sink path: {}", port.0, enable);
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         match tps6699x.enable_sink_path(port, enable).await {
             // Temporary workaround for autofet rejection
             // Tracking bug: https://github.com/OpenDevicePartnership/embedded-services/issues/268
@@ -330,7 +354,10 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     }
 
     async fn get_controller_status(&mut self) -> Result<ControllerStatus<'static>, Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         let boot_flags = tps6699x.get_boot_flags().await?;
         let customer_use = CustomerUse(tps6699x.get_customer_use().await?);
 
@@ -344,19 +371,30 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     }
 
     async fn get_active_fw_version(&self) -> Result<u32, Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         let customer_use = CustomerUse(tps6699x.get_customer_use().await?);
         Ok(customer_use.custom_fw_version())
     }
 
     async fn start_fw_update(&mut self) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         let mut delay = Delay;
         let mut updater: BorrowedUpdater<tps6699x_drv::Tps6699x<'_, M, B>> =
             BorrowedUpdater::with_config(self.fw_update_config.clone());
 
         // Abandon any previous in-progress update
-        if let Some(update) = self.update_state.try_lock().expect("Should be infalliable").take() {
+        if let Some(update) = self
+            .update_state
+            .try_lock()
+            .expect("Update state should not have been locked before this, thus infallible")
+            .take()
+        {
             warn!("Abandoning in-progress update");
             update.updater.abort_fw_update(&mut [&mut tps6699x], &mut delay).await;
         }
@@ -367,7 +405,10 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         let in_progress = updater.start_fw_update(&mut [&mut tps6699x], &mut delay).await?;
         // Re-enable interrupts on port 0 only
         enable_port0_interrupts::<tps6699x_drv::Tps6699x<'_, M, B>>(&mut [&mut tps6699x], &mut guards[0..1]).await?;
-        let mut state = self.update_state.try_lock().expect("Should be infalliable");
+        let mut state = self
+            .update_state
+            .try_lock()
+            .expect("Update state should not have been locked before this, thus infallible");
         *state = Some(FwUpdateState {
             updater: in_progress,
             guards,
@@ -379,12 +420,20 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     ///
     /// This can reset the controller
     async fn abort_fw_update(&mut self) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
         // Check if we're still in firmware update mode
         if tps6699x.get_mode().await? == tps6699x::Mode::F211 {
             let mut delay = Delay;
 
-            if let Some(update) = self.update_state.try_lock().expect("Should be infalliable").take() {
+            if let Some(update) = self
+                .update_state
+                .try_lock()
+                .expect("Update state should not have been locked before this, thus infallible")
+                .take()
+            {
                 // Attempt to abort the firmware update by consuming our update object
                 update.updater.abort_fw_update(&mut [&mut tps6699x], &mut delay).await;
                 Ok(())
@@ -402,8 +451,16 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     ///
     /// This will reset the controller
     async fn finalize_fw_update(&mut self) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
-        if let Some(update) = self.update_state.try_lock().expect("Should be infalliable").take() {
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
+        if let Some(update) = self
+            .update_state
+            .try_lock()
+            .expect("Update state should not have been locked before this, thus infallible")
+            .take()
+        {
             let mut delay = Delay;
             update
                 .updater
@@ -415,8 +472,14 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
     }
 
     async fn write_fw_contents(&mut self, _offset: usize, data: &[u8]) -> Result<(), Error<Self::BusError>> {
-        let mut tps6699x = self.tps6699x.try_lock().expect("Should be infalliable");
-        let mut update_state = self.update_state.try_lock().expect("Should be infalliable");
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
+        let mut update_state = self
+            .update_state
+            .try_lock()
+            .expect("Update state should not have been locked before this, thus infallible");
         if let Some(update) = update_state.as_mut() {
             let mut delay = Delay;
             update

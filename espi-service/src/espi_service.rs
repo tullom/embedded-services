@@ -60,7 +60,7 @@ impl Service<'_> {
             let memory_map = self
                 .ec_memory
                 .try_lock()
-                .expect("Messages handled one after another, should be infalliable.");
+                .expect("Messages handled one after another, should be infallible.");
             ec_type::mem_map_to_battery_msg(&memory_map, offset, length)?
         };
 
@@ -80,7 +80,7 @@ impl Service<'_> {
             let memory_map = self
                 .ec_memory
                 .try_lock()
-                .expect("Messages handled one after another, should be infalliable.");
+                .expect("Messages handled one after another, should be infallible.");
             ec_type::mem_map_to_thermal_msg(&memory_map, offset, length)?
         };
 
@@ -100,7 +100,7 @@ impl Service<'_> {
             let memory_map = self
                 .ec_memory
                 .try_lock()
-                .expect("Messages handled one after another, should be infalliable.");
+                .expect("Messages handled one after another, should be infallible.");
             ec_type::mem_map_to_time_alarm_msg(&memory_map, offset, length)?
         };
 
@@ -121,7 +121,7 @@ impl comms::MailboxDelegate for Service<'_> {
         let mut memory_map = self
             .ec_memory
             .try_lock()
-            .expect("Messages handled one after another, should be infalliable.");
+            .expect("Messages handled one after another, should be infallible.");
         if let Some(msg) = message.data.get::<ec_type::message::CapabilitiesMessage>() {
             ec_type::update_capabilities_section(msg, &mut memory_map);
         } else if let Some(msg) = message.data.get::<ec_type::message::BatteryMessage>() {

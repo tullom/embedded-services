@@ -187,7 +187,7 @@ impl Context {
             },
             Err(_) => {
                 error!("Battery state machine timeout!");
-                // Should be infalliable
+                // Should be infallible
                 self.do_state_machine(BatteryEvent {
                     event: BatteryEventInner::Timeout,
                     device_id: event.device_id,
