@@ -1,5 +1,4 @@
 //! Module contain power-policy related message handling
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embedded_services::{
     debug,
     ipc::deferred,
@@ -178,7 +177,7 @@ impl<const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'_, N
     pub(super) async fn wait_power_command(
         &self,
     ) -> (
-        deferred::Request<'_, NoopRawMutex, CommandData, InternalResponseData>,
+        deferred::Request<'_, GlobalRawMutex, CommandData, InternalResponseData>,
         LocalPortId,
     ) {
         let futures: [_; N] = from_fn(|i| self.power[i].receive());

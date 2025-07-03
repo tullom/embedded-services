@@ -1,10 +1,13 @@
 //! Module that can buffer CFU content
 //! This allows prompt responses to content requests even if the component is busy
 
-use core::{cell::RefCell, future::pending};
+use core::future::pending;
 
 use embassy_futures::select::{select3, Either3};
-use embassy_sync::channel::{DynamicReceiver, DynamicSender};
+use embassy_sync::{
+    channel::{DynamicReceiver, DynamicSender},
+    mutex::Mutex,
+};
 use embassy_time::{with_timeout, Duration, TimeoutError};
 use embedded_cfu_protocol::protocol_definitions::*;
 use embedded_services::{
@@ -12,7 +15,7 @@ use embedded_services::{
         self,
         component::{CfuDevice, InternalResponseData, RequestData},
     },
-    error, intrusive_list, trace,
+    error, intrusive_list, trace, GlobalRawMutex,
 };
 
 /// Internal state for [`Buffer`]
@@ -50,7 +53,7 @@ pub struct Buffer<'a> {
     /// CFU device
     cfu_device: CfuDevice,
     /// Internal state
-    state: RefCell<State>,
+    state: Mutex<GlobalRawMutex, State>,
     /// Component ID to buffer requests for
     buffered_id: ComponentId,
     /// Sender for the buffer
@@ -83,7 +86,7 @@ impl<'a> Buffer<'a> {
     ) -> Self {
         Self {
             cfu_device: CfuDevice::new(external_id),
-            state: RefCell::new(Default::default()),
+            state: Mutex::new(Default::default()),
             buffered_id,
             buffer_sender,
             buffer_receiver,
@@ -228,7 +231,7 @@ impl<'a> Buffer<'a> {
 
     /// Wait for an event
     pub async fn wait_event(&self) -> Event {
-        let is_busy = self.state.borrow().component_busy;
+        let is_busy = self.state.lock().await.component_busy;
         match select3(
             // Wait for a buffered content request
             self.wait_buffered_content(is_busy),
@@ -260,9 +263,8 @@ impl<'a> Buffer<'a> {
     }
 
     /// Top-level event processing function
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn process(&self, event: Event) -> Option<InternalResponseData> {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().await;
         match event {
             Event::CfuRequest(request) => Some(self.process_request(&mut state, request).await),
             Event::BufferedContent(content) => {

@@ -1,20 +1,17 @@
-use core::cell::{Cell, RefCell};
-
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::signal::Signal;
+use embassy_sync::{mutex::Mutex, signal::Signal};
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::digital::Wait;
-use embedded_services::trace;
+use embedded_services::{trace, GlobalRawMutex};
 
 /// This struct manages interrupt signal passthrough
 /// When an interrupt from the device occurs the interrupt to the host is assert
 /// The interrupt will be deasserted when we receive a request from the host
 /// We then ignore any further device interrupts until the response is sent to the host
 pub struct InterruptSignal<IN: Wait, OUT: OutputPin> {
-    state: Cell<InterruptState>,
-    int_in: RefCell<IN>,
-    int_out: RefCell<OUT>,
-    signal: Signal<NoopRawMutex, ()>,
+    state: Mutex<GlobalRawMutex, InterruptState>,
+    int_in: Mutex<GlobalRawMutex, IN>,
+    int_out: Mutex<GlobalRawMutex, OUT>,
+    signal: Signal<GlobalRawMutex, ()>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,59 +25,71 @@ enum InterruptState {
 impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
     pub fn new(int_in: IN, int_out: OUT) -> Self {
         Self {
-            state: Cell::new(InterruptState::Idle),
-            int_in: RefCell::new(int_in),
-            int_out: RefCell::new(int_out),
+            state: Mutex::new(InterruptState::Idle),
+            int_in: Mutex::new(int_in),
+            int_out: Mutex::new(int_out),
             signal: Signal::new(),
         }
     }
 
     /// Deassert the interrupt signal
-    pub fn deassert(&self) {
-        if self.state.get() == InterruptState::Asserted {
-            self.state.set(InterruptState::Waiting);
+    pub async fn deassert(&self) {
+        let mut state = self.state.lock().await;
+        if *state == InterruptState::Asserted {
+            *state = InterruptState::Waiting;
             self.signal.signal(());
         }
     }
 
     /// Release the interrupt signal, allowing device interrupts to passthrough again
-    pub fn release(&self) {
-        if self.state.get() == InterruptState::Waiting {
-            self.state.set(InterruptState::Idle);
+    pub async fn release(&self) {
+        let mut state = self.state.lock().await;
+        if *state == InterruptState::Waiting {
+            *state = InterruptState::Idle;
             self.signal.signal(());
         }
     }
 
     /// Deassert and release the interrupt signal
-    pub fn reset(&self) {
-        self.state.set(InterruptState::Reset);
+    pub async fn reset(&self) {
+        let mut state = self.state.lock().await;
+        *state = InterruptState::Reset;
         self.signal.signal(());
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn process(&self) {
-        let mut int_in = self.int_in.borrow_mut();
-        let mut int_out = self.int_out.borrow_mut();
+        let mut int_in = self.int_in.lock().await;
+        let mut int_out = self.int_out.lock().await;
 
         trace!("Waiting for interrupt");
 
         int_in.wait_for_low().await.unwrap();
 
         int_out.set_low().unwrap();
-        self.state.set(InterruptState::Asserted);
+        {
+            let mut state = self.state.lock().await;
+            *state = InterruptState::Asserted;
+        }
         trace!("Interrupt received");
 
         self.signal.wait().await;
         int_out.set_high().unwrap();
         trace!("Interrupt deasserted");
 
-        if self.state.get() == InterruptState::Reset {
-            self.state.set(InterruptState::Idle);
-            return;
+        {
+            let mut state = self.state.lock().await;
+            if *state == InterruptState::Reset {
+                *state = InterruptState::Idle;
+                return;
+            }
         }
 
         self.signal.wait().await;
-        self.state.set(InterruptState::Idle);
+
+        {
+            let mut state = self.state.lock().await;
+            *state = InterruptState::Idle;
+        }
         trace!("Interrupt cleared");
     }
 }

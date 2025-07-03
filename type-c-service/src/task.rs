@@ -1,6 +1,6 @@
-use core::{cell::RefCell, future::Future};
+use core::future::Future;
 use embassy_futures::select::{select, Either};
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, once_lock::OnceLock};
+use embassy_sync::{mutex::Mutex, once_lock::OnceLock};
 use embedded_services::{
     comms::{self, EndpointID, Internal},
     debug, error, info, intrusive_list,
@@ -12,6 +12,7 @@ use embedded_services::{
         external::{self, ControllerCommandData},
         ControllerId,
     },
+    GlobalRawMutex,
 };
 use embedded_usb_pd::GlobalPortId;
 use embedded_usb_pd::PdError as Error;
@@ -34,14 +35,14 @@ pub struct Service {
     /// Type-C context token
     context: type_c::controller::ContextToken,
     /// Current state
-    state: RefCell<State>,
+    state: Mutex<GlobalRawMutex, State>,
 }
 
 pub enum Event<'a> {
     /// Port event
     PortEvent(GlobalPortId, PortEventKind, PortStatus),
     /// External command
-    ExternalCommand(deferred::Request<'a, NoopRawMutex, external::Command, external::Response<'static>>),
+    ExternalCommand(deferred::Request<'a, GlobalRawMutex, external::Command, external::Response<'static>>),
 }
 
 impl Service {
@@ -50,27 +51,27 @@ impl Service {
         Some(Self {
             tp: comms::Endpoint::uninit(EndpointID::Internal(Internal::Usbc)),
             context: type_c::controller::ContextToken::create()?,
-            state: RefCell::new(State::default()),
+            state: Mutex::new(State::default()),
         })
     }
 
     /// Get the cached port status
-    pub fn get_cached_port_status(&self, port_id: GlobalPortId) -> Result<PortStatus, Error> {
+    pub async fn get_cached_port_status(&self, port_id: GlobalPortId) -> Result<PortStatus, Error> {
         if port_id.0 as usize >= MAX_SUPPORTED_PORTS {
             return Err(Error::InvalidPort);
         }
 
-        let state = self.state.borrow();
+        let state = self.state.lock().await;
         Ok(state.port_status[port_id.0 as usize])
     }
 
     /// Set the cached port status
-    fn set_cached_port_status(&self, port_id: GlobalPortId, status: PortStatus) -> Result<(), Error> {
+    async fn set_cached_port_status(&self, port_id: GlobalPortId, status: PortStatus) -> Result<(), Error> {
         if port_id.0 as usize >= MAX_SUPPORTED_PORTS {
             return Err(Error::InvalidPort);
         }
 
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().await;
         state.port_status[port_id.0 as usize] = status;
         Ok(())
     }
@@ -82,7 +83,7 @@ impl Service {
         event: PortEventKind,
         status: PortStatus,
     ) -> Result<(), Error> {
-        let old_status = self.get_cached_port_status(port_id)?;
+        let old_status = self.get_cached_port_status(port_id).await?;
 
         debug!("Port{}: Event: {:#?}", port_id.0, event);
         debug!("Port{} Previous status: {:#?}", port_id.0, old_status);
@@ -107,7 +108,7 @@ impl Service {
             }
         }
 
-        self.set_cached_port_status(port_id, status)?;
+        self.set_cached_port_status(port_id, status).await?;
 
         Ok(())
     }
@@ -218,9 +219,8 @@ impl Service {
     }
 
     /// Wait for port flags
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn wait_port_flags(&self) -> PortEventFlagsIter {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().await;
         if state.event_iter.is_some() {
             // If we have an existing iterator, return it
             // Yield first to prevent starving other tasks
@@ -232,12 +232,11 @@ impl Service {
     }
 
     /// Wait for the next event
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn wait_next(&self) -> Result<Event<'_>, Error> {
         loop {
             match select(self.wait_port_flags(), self.context.wait_external_command()).await {
                 Either::First(mut pending) => {
-                    let mut state = self.state.borrow_mut();
+                    let mut state = self.state.lock().await;
                     if let Some(port_id) = pending.next() {
                         debug!("Port{}: Event", port_id.0);
                         state.event_iter = Some(pending);
