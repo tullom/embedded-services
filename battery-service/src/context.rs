@@ -328,8 +328,7 @@ impl Context {
                 PresentSubstate::Operational(operational_substate) => match operational_substate {
                     OperationalSubstate::Init => {
                         // Collect static data
-                        // TODO: Add retry logic
-                        info!("Collecting fuel gauge static cache with ID {:?}", event.device_id);
+                        trace!("Collecting fuel gauge static cache with ID {:?}", event.device_id);
                         if self
                             .execute_device_command(event.device_id, device::Command::UpdateStaticCache)
                             .await
@@ -343,8 +342,7 @@ impl Context {
                     }
                     OperationalSubstate::Polling => {
                         // Collect dynamic data
-                        // TODO: Add retry logic
-                        info!("Collecting fuel gauge dynamic cache with ID {:?}", event.device_id);
+                        trace!("Collecting fuel gauge dynamic cache with ID {:?}", event.device_id);
                         if self
                             .execute_device_command(event.device_id, device::Command::UpdateDynamicCache)
                             .await
