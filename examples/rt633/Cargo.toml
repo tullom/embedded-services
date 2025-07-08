@@ -54,3 +54,7 @@ bq40z50 = { git = "https://github.com/OpenDevicePartnership/bq40z50", features =
 ] }
 static_cell = "2.1.0"
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", default-features = false }
+
+# Needed otherwise cargo will pull from git
+[patch."https://github.com/OpenDevicePartnership/embedded-services"]
+embedded-services = { path = "../../embedded-service" }

@@ -18,18 +18,17 @@ use static_cell::StaticCell;
 mod espi_service {
     use battery_service::context::{BatteryEvent, BatteryEventInner};
     use battery_service::device::DeviceId;
-    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
     use embassy_sync::once_lock::OnceLock;
     use embassy_sync::signal::Signal;
     use embassy_time::Timer;
     use embedded_services::comms::{self, EndpointID, External};
     use embedded_services::ec_type::message::BatteryMessage;
-    use embedded_services::error;
+    use embedded_services::{GlobalRawMutex, error};
     use log::info;
 
     pub struct Service {
         endpoint: comms::Endpoint,
-        _signal: Signal<NoopRawMutex, BatteryMessage>,
+        _signal: Signal<GlobalRawMutex, BatteryMessage>,
     }
 
     impl Service {

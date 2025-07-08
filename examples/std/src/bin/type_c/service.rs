@@ -4,11 +4,11 @@ use embassy_time::Timer;
 use embedded_cfu_protocol::protocol_definitions::{FwUpdateOfferResponse, HostToken};
 use embedded_services::comms;
 use embedded_services::power::{self, policy};
-use embedded_services::type_c::{controller, ControllerId};
-use embedded_usb_pd::type_c::Current;
+use embedded_services::type_c::{ControllerId, controller};
 use embedded_usb_pd::Error;
 use embedded_usb_pd::GlobalPortId;
 use embedded_usb_pd::PortId as LocalPortId;
+use embedded_usb_pd::type_c::Current;
 use log::*;
 use static_cell::StaticCell;
 
@@ -19,30 +19,33 @@ const POWER0: power::policy::DeviceId = power::policy::DeviceId(0);
 mod test_controller {
     use std::cell::Cell;
 
-    use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
-    use embedded_services::type_c::{
-        controller::{Contract, ControllerStatus, PortStatus, RetimerFwUpdateState},
-        event::PortEventKind,
+    use embassy_sync::{mutex::Mutex, signal::Signal};
+    use embedded_services::{
+        GlobalRawMutex,
+        type_c::{
+            controller::{Contract, ControllerStatus, PortStatus, RetimerFwUpdateState},
+            event::PortEventKind,
+        },
     };
 
     use super::*;
 
     pub struct ControllerState {
-        events: Signal<NoopRawMutex, PortEventKind>,
-        status: Cell<PortStatus>,
+        events: Signal<GlobalRawMutex, PortEventKind>,
+        status: Mutex<GlobalRawMutex, PortStatus>,
     }
 
     impl ControllerState {
         pub fn new() -> Self {
             Self {
                 events: Signal::new(),
-                status: Cell::new(PortStatus::default()),
+                status: Mutex::new(PortStatus::default()),
             }
         }
 
         /// Simulate a connection
-        pub fn connect(&self, _contract: Contract) {
-            self.status.set(PortStatus::new());
+        pub async fn connect(&self, _contract: Contract) {
+            *self.status.lock().await = PortStatus::new();
 
             let mut events = PortEventKind::none();
             events.set_plug_inserted_or_removed(true);
@@ -51,13 +54,13 @@ mod test_controller {
         }
 
         /// Simulate a sink connecting
-        pub fn connect_sink(&self, current: Current) {
-            self.connect(Contract::Sink(current.into()));
+        pub async fn connect_sink(&self, current: Current) {
+            self.connect(Contract::Sink(current.into())).await;
         }
 
         /// Simulate a disconnection
-        pub fn disconnect(&self) {
-            self.status.set(PortStatus::default());
+        pub async fn disconnect(&self) {
+            *self.status.lock().await = PortStatus::default();
 
             let mut events = PortEventKind::none();
             events.set_plug_inserted_or_removed(true);
@@ -65,8 +68,8 @@ mod test_controller {
         }
 
         /// Simulate a debug accessory source connecting
-        pub fn connect_debug_accessory_source(&self, _current: Current) {
-            self.status.set(PortStatus::new());
+        pub async fn connect_debug_accessory_source(&self, _current: Current) {
+            *self.status.lock().await = PortStatus::new();
 
             let mut events = PortEventKind::none();
             events.set_plug_inserted_or_removed(true);
@@ -112,8 +115,8 @@ mod test_controller {
         }
 
         async fn get_port_status(&mut self, _port: LocalPortId) -> Result<PortStatus, Error<Self::BusError>> {
-            debug!("Get port status: {:#?}", self.state.status.get());
-            Ok(self.state.status.get())
+            debug!("Get port status: {:#?}", *self.state.status.lock().await);
+            Ok(*self.state.status.lock().await)
         }
 
         async fn enable_sink_path(&mut self, _port: LocalPortId, enable: bool) -> Result<(), Error<Self::BusError>> {
@@ -267,19 +270,19 @@ async fn task(spawner: Spawner) {
     Timer::after_secs(1).await;
 
     info!("Simulating connection");
-    state.connect_sink(Current::UsbDefault);
+    state.connect_sink(Current::UsbDefault).await;
     Timer::after_millis(250).await;
 
     info!("Simulating disconnection");
-    state.disconnect();
+    state.disconnect().await;
     Timer::after_millis(250).await;
 
     info!("Simulating debug accessory connection");
-    state.connect_debug_accessory_source(Current::UsbDefault);
+    state.connect_debug_accessory_source(Current::UsbDefault).await;
     Timer::after_millis(250).await;
 
     info!("Simulating debug accessory disconnection");
-    state.disconnect();
+    state.disconnect().await;
     Timer::after_millis(250).await;
 }
 

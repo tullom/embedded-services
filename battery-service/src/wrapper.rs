@@ -76,7 +76,7 @@ impl<'a, C: Controller> Wrapper<'a, C> {
             },
             Command::UpdateStaticCache => match controller.get_static_data().await {
                 Ok(static_data) => {
-                    device.set_static_battery_cache(static_data);
+                    device.set_static_battery_cache(static_data).await;
                     device
                         .send_response(Ok(crate::device::InternalResponse::Complete))
                         .await;
@@ -88,7 +88,7 @@ impl<'a, C: Controller> Wrapper<'a, C> {
             },
             Command::UpdateDynamicCache => match controller.get_dynamic_data().await {
                 Ok(dynamic_data) => {
-                    device.set_dynamic_battery_cache(dynamic_data);
+                    device.set_dynamic_battery_cache(dynamic_data).await;
                     device
                         .send_response(Ok(crate::device::InternalResponse::Complete))
                         .await;
