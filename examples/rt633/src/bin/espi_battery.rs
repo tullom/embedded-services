@@ -217,7 +217,7 @@ async fn battery_publish_task(fg_device: &'static Device) {
     loop {
         Timer::after_secs(1).await;
         // Get dynamic cache
-        let cache = fg_device.get_dynamic_battery_cache();
+        let cache = fg_device.get_dynamic_battery_cache().await;
 
         // Send cache data to eSpi service
         battery_service::comms_send(
