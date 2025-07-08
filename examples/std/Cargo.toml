@@ -54,3 +54,7 @@ path = "src/bin/type_c/service.rs"
 [[bin]]
 name = "type-c-external"
 path = "src/bin/type_c/external.rs"
+
+# Needed otherwise cargo will pull from git
+[patch."https://github.com/OpenDevicePartnership/embedded-services"]
+embedded-services = { path = "../../embedded-service" }

@@ -5,7 +5,7 @@ use core::future::pending;
 
 use embassy_futures::select::{Either3, select3};
 use embassy_sync::{
-    channel::{DynamicReceiver, DynamicSender},
+    channel::{SendDynamicReceiver, SendDynamicSender},
     mutex::Mutex,
 };
 use embassy_time::{Duration, TimeoutError, with_timeout};
@@ -57,10 +57,10 @@ pub struct Buffer<'a> {
     state: Mutex<GlobalRawMutex, State>,
     /// Component ID to buffer requests for
     buffered_id: ComponentId,
-    /// Sender for the buffer
-    buffer_sender: DynamicSender<'a, FwUpdateContentCommand>,
-    /// Receiver for the buffer
-    buffer_receiver: DynamicReceiver<'a, FwUpdateContentCommand>,
+    /// Sender for the buffer. Must be used with a channel with an underlying Mutex that is Send and Sync.
+    buffer_sender: SendDynamicSender<'a, FwUpdateContentCommand>,
+    /// Receiver for the buffer. Must be used with a channel with an underlying Mutex that is Send and Sync.
+    buffer_receiver: SendDynamicReceiver<'a, FwUpdateContentCommand>,
     /// Configuration for the buffer
     config: Config,
 }
@@ -81,8 +81,8 @@ impl<'a> Buffer<'a> {
     pub fn new(
         external_id: ComponentId,
         buffered_id: ComponentId,
-        buffer_sender: DynamicSender<'a, FwUpdateContentCommand>,
-        buffer_receiver: DynamicReceiver<'a, FwUpdateContentCommand>,
+        buffer_sender: SendDynamicSender<'a, FwUpdateContentCommand>,
+        buffer_receiver: SendDynamicReceiver<'a, FwUpdateContentCommand>,
         config: Config,
     ) -> Self {
         Self {

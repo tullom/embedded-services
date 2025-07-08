@@ -1,6 +1,6 @@
 use embassy_executor::{Executor, Spawner};
 use embassy_sync::once_lock::OnceLock;
-use embedded_cfu_protocol::CfuWriterDefault;
+use embedded_cfu_protocol::writer::CfuWriterNop;
 use log::*;
 use static_cell::StaticCell;
 
@@ -13,7 +13,7 @@ use embedded_services::cfu::component::CfuComponentDefault;
 use crate::cfu::component::RequestData;
 
 #[embassy_executor::task]
-async fn device_task0(component: &'static CfuComponentDefault<CfuWriterDefault>) {
+async fn device_task0(component: &'static CfuComponentDefault<CfuWriterNop>) {
     loop {
         if let Err(e) = component.process_request().await {
             error!("Error processing request: {e:?}");
@@ -22,7 +22,7 @@ async fn device_task0(component: &'static CfuComponentDefault<CfuWriterDefault>)
 }
 
 #[embassy_executor::task]
-async fn device_task1(component: &'static CfuComponentDefault<CfuWriterDefault>) {
+async fn device_task1(component: &'static CfuComponentDefault<CfuWriterNop>) {
     loop {
         if let Err(e) = component.process_request().await {
             error!("Error processing request: {e:?}");
@@ -35,17 +35,17 @@ async fn run(spawner: Spawner) {
     embedded_services::init().await;
 
     info!("Creating device 0");
-    static DEVICE0: OnceLock<CfuComponentDefault<CfuWriterDefault>> = OnceLock::new();
+    static DEVICE0: OnceLock<CfuComponentDefault<CfuWriterNop>> = OnceLock::new();
     let mut subs: [Option<ComponentId>; MAX_SUBCMPT_COUNT] = [None; MAX_SUBCMPT_COUNT];
     subs[0] = Some(2);
-    let device0 = DEVICE0.get_or_init(|| CfuComponentDefault::new(1, true, subs, CfuWriterDefault::new()));
+    let device0 = DEVICE0.get_or_init(|| CfuComponentDefault::new(1, true, subs, CfuWriterNop {}));
     cfu::register_device(device0).await.unwrap();
     spawner.must_spawn(device_task0(device0));
 
     info!("Creating device 1");
-    static DEVICE1: OnceLock<CfuComponentDefault<CfuWriterDefault>> = OnceLock::new();
+    static DEVICE1: OnceLock<CfuComponentDefault<CfuWriterNop>> = OnceLock::new();
     let device1 =
-        DEVICE1.get_or_init(|| CfuComponentDefault::new(2, false, [None; MAX_SUBCMPT_COUNT], CfuWriterDefault::new()));
+        DEVICE1.get_or_init(|| CfuComponentDefault::new(2, false, [None; MAX_SUBCMPT_COUNT], CfuWriterNop {}));
     cfu::register_device(device1).await.unwrap();
     spawner.must_spawn(device_task1(device1));
 

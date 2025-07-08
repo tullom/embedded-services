@@ -1,11 +1,14 @@
 use embassy_executor::{Executor, Spawner};
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, once_lock::OnceLock};
+use embassy_sync::once_lock::OnceLock;
 use embassy_time::{Duration, Timer};
 use log::*;
 use static_cell::StaticCell;
 
 use embedded_cfu_protocol::protocol_definitions::*;
-use embedded_services::cfu::{self, component::InternalResponseData, route_request};
+use embedded_services::{
+    GlobalRawMutex,
+    cfu::{self, component::InternalResponseData, route_request},
+};
 
 use cfu_service::buffer;
 
@@ -18,7 +21,7 @@ const CFU_BUFFER_ID: ComponentId = 0x06;
 const CFU_COMPONENT0_ID: ComponentId = 0x20;
 
 mod mock {
-    use std::cell::Cell;
+    use std::sync::atomic::AtomicBool;
 
     use embedded_services::cfu::component::{CfuDevice, CfuDeviceContainer, InternalResponseData};
 
@@ -28,7 +31,7 @@ mod mock {
     pub struct Device {
         cfu_device: CfuDevice,
         version: FwVersion,
-        init: Cell<bool>,
+        init: AtomicBool,
     }
 
     impl Device {
@@ -37,7 +40,7 @@ mod mock {
             Self {
                 cfu_device: CfuDevice::new(component_id),
                 version,
-                init: Cell::new(false),
+                init: AtomicBool::new(false),
             }
         }
 
@@ -71,7 +74,7 @@ mod mock {
                     }
                 }
                 RequestData::GiveContent(content) => {
-                    if self.init.get() {
+                    if self.init.load(std::sync::atomic::Ordering::Acquire) {
                         trace!("Got GiveContent: {content:#?}");
                         // If the device is already initialized, accept the content
                         InternalResponseData::ContentResponse(FwUpdateContentResponse::new(
@@ -80,7 +83,7 @@ mod mock {
                         ))
                     } else {
                         // Take 500 ms to init the device
-                        self.init.set(true);
+                        self.init.store(true, std::sync::atomic::Ordering::Release);
                         info!("Initializing device, taking 500 ms");
                         embassy_time::Timer::after_millis(500).await;
                         info!("Device initialized");
@@ -154,15 +157,15 @@ async fn run(spawner: Spawner) {
 
     info!("Creating buffer");
     static BUFFER: OnceLock<buffer::Buffer<'static>> = OnceLock::new();
-    static BUFFER_CHANNEL: OnceLock<embassy_sync::channel::Channel<NoopRawMutex, FwUpdateContentCommand, 10>> =
+    static BUFFER_CHANNEL: OnceLock<embassy_sync::channel::Channel<GlobalRawMutex, FwUpdateContentCommand, 10>> =
         OnceLock::new();
     let channel = BUFFER_CHANNEL.get_or_init(embassy_sync::channel::Channel::new);
     let buffer = BUFFER.get_or_init(|| {
         buffer::Buffer::new(
             CFU_BUFFER_ID,
             CFU_COMPONENT0_ID,
-            channel.dyn_sender(),
-            channel.dyn_receiver(),
+            From::from(channel.sender()),
+            From::from(channel.receiver()),
             buffer::Config::with_timeout(Duration::from_millis(75)),
         )
     });
