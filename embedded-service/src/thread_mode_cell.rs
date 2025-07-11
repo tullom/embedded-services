@@ -1,6 +1,6 @@
 //! # ThreadModeCell: A cell-like API for static interior mutability scenarios. Backed by thread mode assertion, implying this is only safe on single-core systems.
 use core::cell::Cell;
-use cortex_m::peripheral::{scb::VectActive, SCB};
+use cortex_m::peripheral::{SCB, scb::VectActive};
 
 #[inline(always)]
 fn in_thread_mode() -> bool {
