@@ -1,8 +1,10 @@
+use crate::acpi;
 use crate::device::Device;
 use crate::device::{self, DeviceId};
 use embassy_sync::channel::Channel;
 use embassy_sync::channel::TrySendError;
 use embassy_sync::mutex::Mutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, with_timeout};
 use embedded_services::GlobalRawMutex;
 use embedded_services::{IntrusiveList, debug, error, info, intrusive_list, trace, warn};
@@ -110,6 +112,7 @@ pub struct Context {
     battery_response: Channel<GlobalRawMutex, BatteryResponse, 1>,
     no_op_retry_count: AtomicUsize,
     config: Config,
+    acpi_request: Signal<GlobalRawMutex, ([u8; 69], usize)>,
 }
 
 pub struct Config {
@@ -136,6 +139,7 @@ impl Context {
             battery_response: Channel::new(),
             no_op_retry_count: AtomicUsize::new(0),
             config: Default::default(),
+            acpi_request: Signal::new(),
         }
     }
 
@@ -147,6 +151,7 @@ impl Context {
             battery_response: Channel::new(),
             no_op_retry_count: AtomicUsize::new(0),
             config,
+            acpi_request: Signal::new(),
         }
     }
 
@@ -361,6 +366,79 @@ impl Context {
         }
     }
 
+    pub(super) async fn process_acpi_cmd(&self, (raw, size): (&[u8], usize)) {
+        if let Some(fg) = self.get_fuel_gauge(DeviceId(0)) {
+            if let Ok(payload) = crate::acpi::Payload::from_raw(raw, size) {
+                info!("payload struct: {:?}", payload);
+                match payload.command {
+                    crate::acpi::AcpiCmd::GetBix => self.bix_handler(fg, &payload).await,
+                    crate::acpi::AcpiCmd::GetBst => self.bst_handler(fg, &payload).await,
+                    crate::acpi::AcpiCmd::GetPsr => todo!(),
+                    crate::acpi::AcpiCmd::GetPif => todo!(),
+                    crate::acpi::AcpiCmd::GetBps => todo!(),
+                    crate::acpi::AcpiCmd::SetBtp => todo!(),
+                    crate::acpi::AcpiCmd::SetBpt => todo!(),
+                    crate::acpi::AcpiCmd::GetBpc => todo!(),
+                    crate::acpi::AcpiCmd::SetBmc => todo!(),
+                    crate::acpi::AcpiCmd::GetBmd => todo!(),
+                    crate::acpi::AcpiCmd::GetBct => todo!(),
+                    crate::acpi::AcpiCmd::GetBtm => todo!(),
+                    crate::acpi::AcpiCmd::SetBms => todo!(),
+                    crate::acpi::AcpiCmd::SetBma => todo!(),
+                    crate::acpi::AcpiCmd::GetSta => todo!(),
+                }
+            } else {
+                error!("Battery service: malformed ACPI payload!");
+            }
+            // fg.get_dynamic_battery_cache().await;
+        } else {
+            error!("Battery service: FG not found when trying to process ACPI cmd!");
+        }
+    }
+
+    async fn bix_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
+        info!("Battery service: got BIX command!");
+        let mut buf = [0u8; 69];
+        if let Ok(payload_len) = payload.to_raw(&mut buf) {
+            info!("bix response: {:?}", &buf[..payload_len]);
+            super::comms_send(
+                crate::EndpointID::External(embedded_services::comms::External::Host),
+                &(buf, payload_len),
+            )
+            .await
+            .unwrap();
+            info!("BIX Response sent to espi_service");
+        } else {
+            error!("payload to_raw error")
+        }
+    }
+
+    async fn bst_handler(&self, fg: &Device, _payload: &crate::acpi::Payload<'_>) {
+        info!("Battery service: got BST command!");
+        let mut buf = [0u8; 69];
+        let cache = fg.get_dynamic_battery_cache().await;
+        let bst_data = acpi::compute_bst(&cache);
+        let response = crate::acpi::Payload {
+            version: 1,
+            instance: 1,
+            reserved: 0,
+            command: acpi::AcpiCmd::GetBst,
+            data: &bst_data,
+        };
+        if let Ok(payload_len) = response.to_raw(&mut buf) {
+            info!("bst response: {:?}", &buf[..payload_len]);
+            super::comms_send(
+                crate::EndpointID::External(embedded_services::comms::External::Host),
+                &(buf, payload_len),
+            )
+            .await
+            .unwrap();
+            info!("BST Response sent to espi_service");
+        } else {
+            error!("payload to_raw error")
+        }
+    }
+
     fn get_fuel_gauge(&self, id: DeviceId) -> Option<&'static Device> {
         for device in &self.fuel_gauges {
             if let Some(data) = device.data::<Device>() {
@@ -404,6 +482,14 @@ impl Context {
     /// Wait for battery event.
     pub async fn wait_event(&self) -> BatteryEvent {
         self.battery_event.receive().await
+    }
+
+    pub(super) fn send_acpi_cmd(&self, raw: ([u8; 69], usize)) {
+        self.acpi_request.signal(raw);
+    }
+
+    pub(super) async fn wait_acpi_cmd(&self) -> ([u8; 69], usize) {
+        self.acpi_request.wait().await
     }
 
     pub async fn get_state(&self) -> State {

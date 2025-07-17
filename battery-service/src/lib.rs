@@ -3,12 +3,14 @@
 use core::{any::Any, convert::Infallible};
 
 use context::BatteryEvent;
+use embassy_futures::select::select;
 use embassy_sync::once_lock::OnceLock;
 use embedded_services::{
     comms::{self, EndpointID},
     error, info,
 };
 
+mod acpi;
 pub mod context;
 pub mod controller;
 pub mod device;
@@ -39,8 +41,17 @@ impl Service {
 
     /// Main battery service processing function.
     pub async fn process(&self) {
-        let event = self.context.wait_event().await;
-        self.context.process(event).await;
+        // let event = self.context.wait_event().await;
+
+        // self.context.process(event).await;
+
+        match select(self.context.wait_event(), self.context.wait_acpi_cmd()).await {
+            embassy_futures::select::Either::First(event) => self.context.process(event).await,
+            embassy_futures::select::Either::Second((raw, payload_len)) => {
+                info!("Battery service: ACPI cmd recvd");
+                self.context.process_acpi_cmd((&raw, payload_len)).await
+            }
+        }
     }
 }
 
@@ -56,6 +67,10 @@ impl comms::MailboxDelegate for Service {
             self.context.send_event_no_wait(*event).map_err(|e| match e {
                 embassy_sync::channel::TrySendError::Full(_) => comms::MailboxDelegateError::BufferFull,
             })?
+        }
+
+        if let Some(acpi_cmd) = message.data.get::<([u8; 69], usize)>() {
+            self.context.send_acpi_cmd(*acpi_cmd);
         }
 
         Ok(())
