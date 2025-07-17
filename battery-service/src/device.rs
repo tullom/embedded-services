@@ -1,5 +1,6 @@
 use embassy_sync::{channel::Channel, mutex::Mutex};
 use embassy_time::Duration;
+use embedded_batteries_async::smart_battery::BatteryModeFields;
 use embedded_services::{GlobalRawMutex, Node, NodeContainer, SyncCell};
 
 #[derive(Debug, Clone, Copy)]
@@ -54,6 +55,9 @@ pub struct StaticBatteryMsgs {
 
     /// Device Serial Number.
     pub serial_num: [u8; 4],
+
+    /// Battery Mode.
+    pub battery_mode: BatteryModeFields,
 }
 
 /// Standard dynamic battery data cache
