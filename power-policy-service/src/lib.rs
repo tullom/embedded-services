@@ -15,9 +15,11 @@ pub mod charger;
 
 struct InternalState {
     /// Current consumer state, if any
-    current_consumer_state: Option<consumer::State>,
+    current_consumer_state: Option<consumer::AvailableConsumer>,
     /// Current provider global state
     current_provider_state: provider::State,
+    /// System unconstrained power
+    unconstrained: bool,
 }
 
 impl InternalState {
@@ -25,6 +27,7 @@ impl InternalState {
         Self {
             current_consumer_state: None,
             current_provider_state: provider::State::default(),
+            unconstrained: false,
         }
     }
 }

@@ -84,6 +84,7 @@ mod battery {
                     info!("Consumer connected: {} {:?}", id.0, capability);
                     Ok(())
                 }
+                _ => Ok(()),
             }
         }
     }

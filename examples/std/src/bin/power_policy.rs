@@ -1,7 +1,7 @@
 use embassy_executor::{Executor, Spawner};
 use embassy_sync::once_lock::OnceLock;
 use embassy_time::{self as _, Timer};
-use embedded_services::power::policy::{self, PowerCapability, device};
+use embedded_services::power::policy::{self, ConsumerPowerCapability, PowerCapability, device, flags};
 use log::*;
 use static_cell::StaticCell;
 
@@ -99,7 +99,10 @@ async fn run(spawner: Spawner) {
     info!("Connecting device 0");
     let device0 = device0.attach().await.unwrap();
     device0
-        .notify_consumer_power_capability(Some(LOW_POWER.into()))
+        .notify_consumer_power_capability(Some(ConsumerPowerCapability {
+            capability: LOW_POWER,
+            flags: flags::Consumer::none().with_unconstrained_power(),
+        }))
         .await
         .unwrap();
 

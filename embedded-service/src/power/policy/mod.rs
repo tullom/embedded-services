@@ -125,6 +125,8 @@ pub enum CommsData {
     ConsumerDisconnected(DeviceId),
     /// Consumer connected
     ConsumerConnected(DeviceId, PowerCapability),
+    /// Unconstrained state changed
+    Unconstrained(bool),
 }
 
 /// Message to send with the comms service
