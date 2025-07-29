@@ -11,7 +11,7 @@ use embedded_usb_pd::GlobalPortId;
 
 use super::*;
 
-impl<const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'_, N, C, V> {
+impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> ControllerWrapper<'a, N, C, BACK, V> {
     /// Return the power device for the given port
     pub(super) fn get_power_device(
         &self,

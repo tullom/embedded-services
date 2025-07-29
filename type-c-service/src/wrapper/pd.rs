@@ -1,10 +1,32 @@
+use embassy_futures::yield_now;
+use embassy_sync::pubsub::WaitResult;
 use embedded_services::debug;
 use embedded_services::type_c::controller::{InternalResponseData, Response};
 use embedded_usb_pd::ucsi::lpm;
 
 use super::*;
 
-impl<const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'_, N, C, V> {
+impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> ControllerWrapper<'a, N, C, BACK, V> {
+    async fn process_get_pd_alert(&self, local_port: LocalPortId) -> Result<Option<Ado>, PdError> {
+        let mut backing = self.backing.lock().await;
+        let mut channel = match backing.pd_alert_channel_mut(local_port.0 as usize).await {
+            Some(channel) => channel,
+            None => return Err(PdError::InvalidPort),
+        };
+
+        loop {
+            match channel.1.try_next_message() {
+                Some(WaitResult::Message(alert)) => return Ok(Some(alert)),
+                None => return Ok(None),
+                Some(WaitResult::Lagged(count)) => {
+                    warn!("Port{}: Lagged PD alert channel: {}", local_port.0, count);
+                    // Yield to avoid starving other tasks since we're in a loop and try_next_message isn't async
+                    yield_now().await;
+                }
+            }
+        }
+    }
+
     /// Handle a port command
     async fn process_port_command(
         &self,
@@ -71,6 +93,10 @@ impl<const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'_, N
                     Error::Bus(_) => Err(PdError::Failed),
                     Error::Pd(e) => Err(e),
                 },
+            },
+            controller::PortCommandData::GetPdAlert => match self.process_get_pd_alert(local_port).await {
+                Ok(alert) => Ok(controller::PortResponseData::PdAlert(alert)),
+                Err(e) => Err(e),
             },
         })
     }

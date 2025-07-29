@@ -1,3 +1,4 @@
+use crate::wrapper::backing::Backing;
 use crate::wrapper::{ControllerWrapper, FwOfferValidator};
 use ::tps6699x::registers::field_sets::IntEventBus1;
 use ::tps6699x::registers::{PdCcPullUp, PpExtVbusSw, PpIntVbusSw};
@@ -20,6 +21,7 @@ use embedded_services::type_c::controller::{self, Controller, ControllerStatus, 
 use embedded_services::type_c::event::{PortEvent, PortStatusChanged};
 use embedded_services::type_c::ControllerId;
 use embedded_services::{debug, info, trace, type_c, warn, GlobalRawMutex};
+use embedded_usb_pd::ado::Ado;
 use embedded_usb_pd::pdinfo::PowerPathStatus;
 use embedded_usb_pd::pdo::{sink, source, Common, Rdo};
 use embedded_usb_pd::type_c::Current as TypecCurrent;
@@ -444,6 +446,14 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
         }
     }
 
+    async fn get_pd_alert(&mut self, port: LocalPortId) -> Result<Option<Ado>, Error<Self::BusError>> {
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
+        tps6699x.get_rx_ado(port).await
+    }
+
     async fn get_controller_status(&mut self) -> Result<ControllerStatus<'static>, Error<Self::BusError>> {
         let mut tps6699x = self
             .tps6699x
@@ -595,23 +605,26 @@ impl<'a, const N: usize, M: RawMutex, B: I2c> Object<tps6699x_drv::Tps6699x<'a, 
 }
 
 /// TPS66994 controller wrapper
-pub type Tps66994Wrapper<'a, M, B, V> =
-    ControllerWrapper<'a, TPS66994_NUM_PORTS, Tps6699x<'a, TPS66994_NUM_PORTS, M, B>, V>;
+pub type Tps66994Wrapper<'a, M, BUS, BACK, V> =
+    ControllerWrapper<'a, TPS66994_NUM_PORTS, Tps6699x<'a, TPS66994_NUM_PORTS, M, BUS>, BACK, V>;
 
 /// TPS66993 controller wrapper
-pub type Tps66993Wrapper<'a, M, B, V> =
-    ControllerWrapper<'a, TPS66993_NUM_PORTS, Tps6699x<'a, TPS66993_NUM_PORTS, M, B>, V>;
+pub type Tps66993Wrapper<'a, M, BUS, BACK, V> =
+    ControllerWrapper<'a, TPS66993_NUM_PORTS, Tps6699x<'a, TPS66993_NUM_PORTS, M, BUS>, BACK, V>;
 
 /// Create a TPS66994 controller wrapper
-pub fn tps66994<'a, M: RawMutex, B: I2c, V: FwOfferValidator>(
-    controller: tps6699x_drv::Tps6699x<'a, M, B>,
+// TODO: combine and trim down the number of parameters
+#[allow(clippy::too_many_arguments)]
+pub fn tps66994<'a, M: RawMutex, BUS: I2c, BACK: Backing<'a>, V: FwOfferValidator>(
+    controller: tps6699x_drv::Tps6699x<'a, M, BUS>,
     controller_id: ControllerId,
     port_ids: &'a [GlobalPortId],
     power_ids: [policy::DeviceId; TPS66994_NUM_PORTS],
     cfu_id: ComponentId,
+    backing: BACK,
     fw_update_config: FwUpdateConfig,
     fw_version_validator: V,
-) -> Result<Tps66994Wrapper<'a, M, B, V>, PdError> {
+) -> Result<Tps66994Wrapper<'a, M, BUS, BACK, V>, PdError> {
     if port_ids.len() != TPS66994_NUM_PORTS {
         return Err(PdError::InvalidParams);
     }
@@ -620,21 +633,25 @@ pub fn tps66994<'a, M: RawMutex, B: I2c, V: FwOfferValidator>(
         controller::Device::new(controller_id, port_ids),
         from_fn(|i| policy::device::Device::new(power_ids[i])),
         CfuDevice::new(cfu_id),
+        backing,
         Tps6699x::new(controller, fw_update_config),
         fw_version_validator,
     ))
 }
 
 /// Create a new TPS66993 controller wrapper
-pub fn tps66993<'a, M: RawMutex, B: I2c, V: FwOfferValidator>(
-    controller: tps6699x_drv::Tps6699x<'a, M, B>,
+// TODO: combine and trim down the number of parameters
+#[allow(clippy::too_many_arguments)]
+pub fn tps66993<'a, M: RawMutex, BUS: I2c, BACK: Backing<'a>, V: FwOfferValidator>(
+    controller: tps6699x_drv::Tps6699x<'a, M, BUS>,
     controller_id: ControllerId,
     port_ids: &'a [GlobalPortId],
     power_ids: [policy::DeviceId; TPS66993_NUM_PORTS],
     cfu_id: ComponentId,
+    backing: BACK,
     fw_update_config: FwUpdateConfig,
     fw_version_validator: V,
-) -> Result<Tps66993Wrapper<'a, M, B, V>, PdError> {
+) -> Result<Tps66993Wrapper<'a, M, BUS, BACK, V>, PdError> {
     if port_ids.len() != TPS66993_NUM_PORTS {
         return Err(PdError::InvalidParams);
     }
@@ -643,6 +660,7 @@ pub fn tps66993<'a, M: RawMutex, B: I2c, V: FwOfferValidator>(
         controller::Device::new(controller_id, port_ids),
         from_fn(|i| policy::device::Device::new(power_ids[i])),
         CfuDevice::new(cfu_id),
+        backing,
         Tps6699x::new(controller, fw_update_config),
         fw_version_validator,
     ))

@@ -36,7 +36,7 @@ pub enum Event {
     RecoveryTick,
 }
 
-impl<const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'_, N, C, V> {
+impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> ControllerWrapper<'a, N, C, BACK, V> {
     /// Create a new invalid FW version response
     fn create_invalid_fw_version_response(&self) -> InternalResponseData {
         let dev_inf = FwVerComponentInfo::new(FwVersion::new(0xffffffff), self.cfu_device.component_id());

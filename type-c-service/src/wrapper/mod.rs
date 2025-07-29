@@ -16,10 +16,13 @@ use embedded_services::type_c::event::{PortEvent, PortNotificationSingle, PortPe
 use embedded_services::GlobalRawMutex;
 use embedded_services::SyncCell;
 use embedded_services::{debug, error, info, trace, warn};
+use embedded_usb_pd::ado::Ado;
 use embedded_usb_pd::{Error, PdError, PortId as LocalPortId};
 
+use crate::wrapper::backing::Backing;
 use crate::{PortEventStreamer, PortEventVariant};
 
+pub mod backing;
 mod cfu;
 mod pd;
 mod power;
@@ -59,8 +62,8 @@ pub trait FwOfferValidator {
 pub enum Event<'a> {
     /// Port status changed
     PortStatusChanged(LocalPortId, PortStatusChanged),
-    /// Port notification received
-    PortNotification(LocalPortId, PortNotificationSingle),
+    /// PD alert
+    PdAlert(LocalPortId, Ado),
     /// Power policy command received
     PowerPolicyCommand(
         LocalPortId,
@@ -73,7 +76,7 @@ pub enum Event<'a> {
 
 /// Takes an implementation of the `Controller` trait and wraps it with logic to handle
 /// message passing and power-policy integration.
-pub struct ControllerWrapper<'a, const N: usize, C: Controller, V: FwOfferValidator> {
+pub struct ControllerWrapper<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> {
     /// PD controller to interface with PD service
     pd_controller: controller::Device<'a>,
     /// Power policy devices to interface with power policy service
@@ -88,14 +91,17 @@ pub struct ControllerWrapper<'a, const N: usize, C: Controller, V: FwOfferValida
     fw_version_validator: V,
     /// FW update ticker used to check for timeouts and recovery attempts
     fw_update_ticker: Mutex<GlobalRawMutex, embassy_time::Ticker>,
+    /// Channels and buffers used by the wrapper
+    backing: Mutex<GlobalRawMutex, BACK>,
 }
 
-impl<'a, const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, N, C, V> {
+impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> ControllerWrapper<'a, N, C, BACK, V> {
     /// Create a new controller wrapper
     pub fn new(
         pd_controller: controller::Device<'a>,
         power: [policy::device::Device; N],
         cfu_device: CfuDevice,
+        backing: BACK,
         controller: C,
         fw_version_validator: V,
     ) -> Self {
@@ -110,6 +116,7 @@ impl<'a, const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'
             fw_update_ticker: Mutex::new(embassy_time::Ticker::every(embassy_time::Duration::from_millis(
                 DEFAULT_FW_UPDATE_TICK_INTERVAL_MS,
             ))),
+            backing: Mutex::new(backing),
         }
     }
 
@@ -215,6 +222,31 @@ impl<'a, const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'
         Ok(())
     }
 
+    /// Process a PD alert
+    async fn process_pd_alert(&self, port: LocalPortId, alert: Ado) -> Result<(), Error<<C as Controller>::BusError>> {
+        let port_index = port.0 as usize;
+        if port_index >= N {
+            error!("Invalid port {}", port_index);
+            return Err(PdError::InvalidPort.into());
+        }
+
+        // Buffer the alert
+        let backing = self.backing.lock().await;
+        let channel = backing.pd_alert_channel(port_index).await.ok_or(PdError::InvalidPort)?;
+        channel.0.publish_immediate(alert);
+
+        // Pend the alert
+        let mut event = self.active_events[port_index].get();
+        event.notification.set_alert(true);
+        self.active_events[port_index].set(event);
+
+        // Pend this port
+        let mut pending = PortPending::none();
+        pending.pend_port(port.0 as usize);
+        self.pd_controller.notify_ports(pending).await;
+        Ok(())
+    }
+
     /// Wait for a pending port event
     async fn wait_port_pending(
         &self,
@@ -269,10 +301,22 @@ impl<'a, const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'
                                 // Return a port status changed event
                                 return Ok(Event::PortStatusChanged(port_id, status_event));
                             }
-                            PortEventVariant::Notification(notification) => {
-                                // Return a port notification event
-                                return Ok(Event::PortNotification(port_id, notification));
-                            }
+                            PortEventVariant::Notification(notification) => match notification {
+                                PortNotificationSingle::Alert => {
+                                    if let Some(ado) = self.controller.lock().await.get_pd_alert(port_id).await? {
+                                        // Return a PD alert event
+                                        return Ok(Event::PdAlert(port_id, ado));
+                                    } else {
+                                        // Didn't get an ADO, wait for next event
+                                        continue;
+                                    }
+                                }
+                                _ => {
+                                    // Other notifications currently unimplemented
+                                    trace!("Unimplemented port notification: {:?}", notification);
+                                    continue;
+                                }
+                            },
                         }
                     } else {
                         self.state.lock().await.port_event_streaming_state = None;
@@ -321,10 +365,7 @@ impl<'a, const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'
                     Ok(())
                 }
             },
-            Event::PortNotification(_, _) => {
-                // Nop for us
-                Ok(())
-            }
+            Event::PdAlert(port, alert) => self.process_pd_alert(port, alert).await,
         }
     }
 
@@ -368,7 +409,9 @@ impl<'a, const N: usize, C: Controller, V: FwOfferValidator> ControllerWrapper<'
     }
 }
 
-impl<const N: usize, C: Controller, V: FwOfferValidator> Object<C> for ControllerWrapper<'_, N, C, V> {
+impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> Object<C>
+    for ControllerWrapper<'a, N, C, BACK, V>
+{
     fn get_inner(&self) -> impl Future<Output = impl RefGuard<C>> {
         self.controller.lock()
     }
