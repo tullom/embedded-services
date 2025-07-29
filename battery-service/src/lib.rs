@@ -10,6 +10,8 @@ use embedded_services::{
     error, info,
 };
 
+use crate::device::{DynamicBatteryMsgs, StaticBatteryMsgs};
+
 mod acpi;
 pub mod context;
 pub mod controller;
@@ -17,12 +19,12 @@ pub mod device;
 pub mod wrapper;
 
 /// Standard Battery Service.
-pub struct Service {
+pub struct Service<DynamicMsgs: Default + 'static, StaticMsgs: Default + 'static> {
     pub endpoint: comms::Endpoint,
-    pub context: context::Context,
+    pub context: context::Context<DynamicMsgs, StaticMsgs>,
 }
 
-impl Service {
+impl<DynamicMsgs: Default + 'static, StaticMsgs: Default + 'static> Service<DynamicMsgs, StaticMsgs> {
     /// Create a new battery service instance.
     pub fn new() -> Self {
         Service {
@@ -55,13 +57,15 @@ impl Service {
     }
 }
 
-impl Default for Service {
+impl<DynamicMsgs: Default + 'static, StaticMsgs: Default + 'static> Default for Service<DynamicMsgs, StaticMsgs> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl comms::MailboxDelegate for Service {
+impl<DynamicMsgs: Default + 'static, StaticMsgs: Default + 'static> comms::MailboxDelegate
+    for Service<DynamicMsgs, StaticMsgs>
+{
     fn receive(&self, message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
         if let Some(event) = message.data.get::<BatteryEvent>() {
             self.context.send_event_no_wait(*event).map_err(|e| match e {
@@ -77,14 +81,14 @@ impl comms::MailboxDelegate for Service {
     }
 }
 
-static SERVICE: OnceLock<Service> = OnceLock::new();
+static SERVICE: OnceLock<Service<DynamicBatteryMsgs, StaticBatteryMsgs>> = OnceLock::new();
 
 /// Register fuel gauge device with the battery service.
 ///
 /// Must be done before sending the battery service commands so that hardware device is visible
 /// to the battery service.
 pub async fn register_fuel_gauge(
-    device: &'static device::Device,
+    device: &'static device::Device<DynamicBatteryMsgs, StaticBatteryMsgs>,
 ) -> Result<(), embedded_services::intrusive_list::Error> {
     let service = SERVICE.get().await;
 

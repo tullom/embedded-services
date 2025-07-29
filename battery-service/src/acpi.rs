@@ -1,4 +1,6 @@
-use embedded_batteries_async::acpi::PowerUnit;
+use embassy_sync::mutex::MutexGuard;
+// use embedded_batteries_async::acpi::PowerUnit;
+use embedded_services::GlobalRawMutex;
 
 use crate::device::{DynamicBatteryMsgs, StaticBatteryMsgs};
 
@@ -87,67 +89,131 @@ impl TryFrom<u8> for AcpiCmd {
     }
 }
 
-pub(crate) fn compute_bst(cache: &DynamicBatteryMsgs) -> [u8; 16] {
-    let mut bst = [0u8; 16];
+// TODO: Make unguarded (copy) trait
+pub trait AcpiGettersGuarded {
+    type DynamicMsgs;
+    type StaticMsgs;
 
-    let charging = if cache.battery_status & (1 << 6) == 0 {
-        embedded_batteries_async::acpi::BatteryState::CHARGING
-    } else {
-        embedded_batteries_async::acpi::BatteryState::DISCHARGING
-    };
+    fn get_dynamic_cache_guarded(&self) -> impl Future<Output = MutexGuard<'_, GlobalRawMutex, Self::DynamicMsgs>>;
+    fn get_static_cache_guarded(&self) -> impl Future<Output = MutexGuard<'_, GlobalRawMutex, Self::StaticMsgs>>;
 
-    // TODO: add critical energy state and charge limiting state
-    let bst_return = embedded_batteries_async::acpi::BstReturn {
-        battery_state: charging,
-        battery_remaining_capacity: cache.remaining_capacity_mwh,
-        battery_present_rate: cache.current_ma.unsigned_abs().into(),
-        battery_present_voltage: cache.voltage_mv.into(),
-    };
+    fn compute_bst(
+        &self,
+        dynamic_cache: MutexGuard<'_, GlobalRawMutex, Self::DynamicMsgs>,
+        static_cache: MutexGuard<'_, GlobalRawMutex, Self::StaticMsgs>,
+    ) -> embedded_batteries_async::acpi::BstReturn;
 
-    bst[..4].copy_from_slice(&u32::to_le_bytes(bst_return.battery_state.bits()));
-    bst[4..8].copy_from_slice(&u32::to_le_bytes(bst_return.battery_present_rate));
-    bst[8..12].copy_from_slice(&u32::to_le_bytes(bst_return.battery_remaining_capacity));
-    bst[12..16].copy_from_slice(&u32::to_le_bytes(bst_return.battery_present_voltage));
-
-    bst
+    fn compute_bix<'a>(
+        &self,
+        dynamic_cache: &'a Self::DynamicMsgs,
+        static_cache: &'a Self::StaticMsgs,
+    ) -> embedded_batteries_async::acpi::BixReturn<'a>;
 }
 
-pub(crate) fn compute_bix(static_cache: &StaticBatteryMsgs, dynamic_cache: &DynamicBatteryMsgs) -> [u8; 16] {
-    let mut bst = [0u8; 16];
+impl AcpiGettersGuarded for crate::device::Device<DynamicBatteryMsgs, StaticBatteryMsgs> {
+    type DynamicMsgs = DynamicBatteryMsgs;
 
-    let bix_return = embedded_batteries_async::acpi::BixReturn {
-        revision: 1,
-        power_unit: if static_cache.battery_mode.capacity_mode() {
-            PowerUnit::MilliWatts
+    type StaticMsgs = StaticBatteryMsgs;
+
+    async fn get_dynamic_cache_guarded(&self) -> MutexGuard<'_, GlobalRawMutex, Self::DynamicMsgs> {
+        self.get_dynamic_battery_cache().await
+    }
+
+    async fn get_static_cache_guarded(&self) -> MutexGuard<'_, GlobalRawMutex, Self::StaticMsgs> {
+        self.get_static_battery_cache().await
+    }
+
+    // Give user ability to change mutex guarded values
+    fn compute_bst(
+        &self,
+        dynamic_cache: MutexGuard<'_, GlobalRawMutex, Self::DynamicMsgs>,
+        _static_cache: MutexGuard<'_, GlobalRawMutex, Self::StaticMsgs>,
+    ) -> embedded_batteries_async::acpi::BstReturn {
+        let charging = if dynamic_cache.battery_status & (1 << 6) == 0 {
+            embedded_batteries_async::acpi::BatteryState::CHARGING
         } else {
-            PowerUnit::MilliAmps
-        },
-        design_capacity: static_cache.design_capacity_mwh,
-        last_full_charge_capacity: dynamic_cache.full_charge_capacity_mwh,
-        battery_technology: embedded_batteries_async::acpi::BatteryTechnology::Secondary,
-        design_voltage: static_cache.design_voltage_mv.into(),
-        design_cap_of_warning: 0, // TODO: read actual value
-        design_cap_of_low: 0,     // TODO: read actual value
-        cycle_count: dynamic_cache.cycle_count.into(),
-        measurement_accuracy: u32::from(100 - dynamic_cache.max_error_pct) * 1000u32,
-        max_sampling_time: 0xFFFFFFFF,      // TODO: read this from fg
-        min_sampling_time: 0xFFFFFFFF,      // TODO: read this from fg
-        max_averaging_interval: 0xFFFFFFFF, // TODO: read this from fg
-        min_averaging_interval: 0xFFFFFFFF, // TODO: read this from fg
-        battery_capacity_granularity_1: 1,
-        battery_capacity_granularity_2: 1,
-        model_number: &mut [],
-        serial_number: &mut [],
-        battery_type: &mut [],
-        oem_info: &mut [],
-        battery_swapping_capability: embedded_batteries_async::acpi::BatterySwapCapability::NonSwappable,
-    };
+            embedded_batteries_async::acpi::BatteryState::DISCHARGING
+        };
 
-    // Revision
-    // bst[..4].copy_from_slice(&u32::to_le_bytes(bix_return.battery_state.bits()));
-    // bst[4..8].copy_from_slice(&u32::to_le_bytes(bix_return.battery_present_rate));
-    // bst[8..12].copy_from_slice(&u32::to_le_bytes(bix_return.battery_remaining_capacity));
-    // bst[12..16].copy_from_slice(&u32::to_le_bytes(bix_return.battery_present_voltage));
+        // TODO: add critical energy state and charge limiting state
+        embedded_batteries_async::acpi::BstReturn {
+            battery_state: charging,
+            battery_remaining_capacity: dynamic_cache.remaining_capacity_mwh,
+            battery_present_rate: dynamic_cache.current_ma.unsigned_abs().into(),
+            battery_present_voltage: dynamic_cache.voltage_mv.into(),
+        }
+    }
 
-    bst
+    fn compute_bix<'a>(
+        &self,
+        _dynamic_cache: &'a Self::DynamicMsgs,
+        _static_cache: &'a Self::StaticMsgs,
+    ) -> embedded_batteries_async::acpi::BixReturn<'a> {
+        todo!()
+    }
 }
+
+// pub(crate) fn compute_bst(cache: &DynamicBatteryMsgs) -> [u8; 16] {
+//     let mut bst = [0u8; 16];
+
+//     let charging = if cache.battery_status & (1 << 6) == 0 {
+//         embedded_batteries_async::acpi::BatteryState::CHARGING
+//     } else {
+//         embedded_batteries_async::acpi::BatteryState::DISCHARGING
+//     };
+
+//     // TODO: add critical energy state and charge limiting state
+//     let bst_return = embedded_batteries_async::acpi::BstReturn {
+//         battery_state: charging,
+//         battery_remaining_capacity: cache.remaining_capacity_mwh,
+//         battery_present_rate: cache.current_ma.unsigned_abs().into(),
+//         battery_present_voltage: cache.voltage_mv.into(),
+//     };
+
+//     bst[..4].copy_from_slice(&u32::to_le_bytes(bst_return.battery_state.bits()));
+//     bst[4..8].copy_from_slice(&u32::to_le_bytes(bst_return.battery_present_rate));
+//     bst[8..12].copy_from_slice(&u32::to_le_bytes(bst_return.battery_remaining_capacity));
+//     bst[12..16].copy_from_slice(&u32::to_le_bytes(bst_return.battery_present_voltage));
+
+//     bst
+// }
+
+// pub(crate) fn compute_bix(static_cache: &StaticBatteryMsgs, dynamic_cache: &DynamicBatteryMsgs) -> [u8; 16] {
+//     let mut bst = [0u8; 16];
+
+//     let bix_return = embedded_batteries_async::acpi::BixReturn {
+//         revision: 1,
+//         power_unit: if static_cache.battery_mode.capacity_mode() {
+//             PowerUnit::MilliWatts
+//         } else {
+//             PowerUnit::MilliAmps
+//         },
+//         design_capacity: static_cache.design_capacity_mwh,
+//         last_full_charge_capacity: dynamic_cache.full_charge_capacity_mwh,
+//         battery_technology: embedded_batteries_async::acpi::BatteryTechnology::Secondary,
+//         design_voltage: static_cache.design_voltage_mv.into(),
+//         design_cap_of_warning: 0, // TODO: read actual value
+//         design_cap_of_low: 0,     // TODO: read actual value
+//         cycle_count: dynamic_cache.cycle_count.into(),
+//         measurement_accuracy: u32::from(100 - dynamic_cache.max_error_pct) * 1000u32,
+//         max_sampling_time: 0xFFFFFFFF,      // TODO: read this from fg
+//         min_sampling_time: 0xFFFFFFFF,      // TODO: read this from fg
+//         max_averaging_interval: 0xFFFFFFFF, // TODO: read this from fg
+//         min_averaging_interval: 0xFFFFFFFF, // TODO: read this from fg
+//         battery_capacity_granularity_1: 1,
+//         battery_capacity_granularity_2: 1,
+//         model_number: &mut [],
+//         serial_number: &mut [],
+//         battery_type: &mut [],
+//         oem_info: &mut [],
+//         battery_swapping_capability: embedded_batteries_async::acpi::BatterySwapCapability::NonSwappable,
+//     };
+
+//     // Revision
+//     // bst[..4].copy_from_slice(&u32::to_le_bytes(bix_return.battery_state.bits()));
+//     // bst[4..8].copy_from_slice(&u32::to_le_bytes(bix_return.battery_present_rate));
+//     // bst[8..12].copy_from_slice(&u32::to_le_bytes(bix_return.battery_remaining_capacity));
+//     // bst[12..16].copy_from_slice(&u32::to_le_bytes(bix_return.battery_present_voltage));
+
+//     bst
+// }

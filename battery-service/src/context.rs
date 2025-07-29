@@ -1,4 +1,4 @@
-use crate::acpi;
+use crate::acpi::{self, AcpiGettersGuarded};
 use crate::device::Device;
 use crate::device::{self, DeviceId};
 use embassy_sync::channel::Channel;
@@ -9,6 +9,7 @@ use embassy_time::{Duration, with_timeout};
 use embedded_services::GlobalRawMutex;
 use embedded_services::{IntrusiveList, debug, error, info, intrusive_list, trace, warn};
 
+use core::marker::PhantomData;
 use core::ops::DerefMut;
 use core::sync::atomic::AtomicUsize;
 
@@ -105,7 +106,7 @@ pub struct BatteryEvent {
 }
 
 /// Battery service context, hardware agnostic state.
-pub struct Context {
+pub struct Context<DynamicMsgs: Default + 'static, StaticMsgs: Default + 'static> {
     fuel_gauges: IntrusiveList,
     state: Mutex<GlobalRawMutex, State>,
     battery_event: Channel<GlobalRawMutex, BatteryEvent, 1>,
@@ -113,6 +114,8 @@ pub struct Context {
     no_op_retry_count: AtomicUsize,
     config: Config,
     acpi_request: Signal<GlobalRawMutex, ([u8; 69], usize)>,
+    _dynamic_msg: PhantomData<DynamicMsgs>,
+    _static_msg: PhantomData<StaticMsgs>,
 }
 
 pub struct Config {
@@ -129,7 +132,7 @@ impl Default for Config {
     }
 }
 
-impl Context {
+impl<DynamicMsgs: Default + 'static, StaticMsgs: Default + 'static> Context<DynamicMsgs, StaticMsgs> {
     /// Create a new context instance.
     pub fn new() -> Self {
         Self {
@@ -140,6 +143,8 @@ impl Context {
             no_op_retry_count: AtomicUsize::new(0),
             config: Default::default(),
             acpi_request: Signal::new(),
+            _dynamic_msg: PhantomData,
+            _static_msg: PhantomData,
         }
     }
 
@@ -152,6 +157,8 @@ impl Context {
             no_op_retry_count: AtomicUsize::new(0),
             config,
             acpi_request: Signal::new(),
+            _dynamic_msg: PhantomData,
+            _static_msg: PhantomData,
         }
     }
 
@@ -367,36 +374,32 @@ impl Context {
     }
 
     pub(super) async fn process_acpi_cmd(&self, (raw, size): (&[u8], usize)) {
-        if let Some(fg) = self.get_fuel_gauge(DeviceId(0)) {
-            if let Ok(payload) = crate::acpi::Payload::from_raw(raw, size) {
-                info!("payload struct: {:?}", payload);
-                match payload.command {
-                    crate::acpi::AcpiCmd::GetBix => self.bix_handler(fg, &payload).await,
-                    crate::acpi::AcpiCmd::GetBst => self.bst_handler(fg, &payload).await,
-                    crate::acpi::AcpiCmd::GetPsr => todo!(),
-                    crate::acpi::AcpiCmd::GetPif => todo!(),
-                    crate::acpi::AcpiCmd::GetBps => todo!(),
-                    crate::acpi::AcpiCmd::SetBtp => todo!(),
-                    crate::acpi::AcpiCmd::SetBpt => todo!(),
-                    crate::acpi::AcpiCmd::GetBpc => todo!(),
-                    crate::acpi::AcpiCmd::SetBmc => todo!(),
-                    crate::acpi::AcpiCmd::GetBmd => todo!(),
-                    crate::acpi::AcpiCmd::GetBct => todo!(),
-                    crate::acpi::AcpiCmd::GetBtm => todo!(),
-                    crate::acpi::AcpiCmd::SetBms => todo!(),
-                    crate::acpi::AcpiCmd::SetBma => todo!(),
-                    crate::acpi::AcpiCmd::GetSta => todo!(),
-                }
-            } else {
-                error!("Battery service: malformed ACPI payload!");
+        let fg_device = self.get_fuel_gauge(DeviceId(0)).unwrap();
+        if let Ok(payload) = crate::acpi::Payload::from_raw(raw, size) {
+            info!("payload struct: {:?}", payload);
+            match payload.command {
+                crate::acpi::AcpiCmd::GetBix => todo!(),
+                crate::acpi::AcpiCmd::GetBst => self.bst_handler(fg_device, &payload).await,
+                crate::acpi::AcpiCmd::GetPsr => todo!(),
+                crate::acpi::AcpiCmd::GetPif => todo!(),
+                crate::acpi::AcpiCmd::GetBps => todo!(),
+                crate::acpi::AcpiCmd::SetBtp => todo!(),
+                crate::acpi::AcpiCmd::SetBpt => todo!(),
+                crate::acpi::AcpiCmd::GetBpc => todo!(),
+                crate::acpi::AcpiCmd::SetBmc => todo!(),
+                crate::acpi::AcpiCmd::GetBmd => todo!(),
+                crate::acpi::AcpiCmd::GetBct => todo!(),
+                crate::acpi::AcpiCmd::GetBtm => todo!(),
+                crate::acpi::AcpiCmd::SetBms => todo!(),
+                crate::acpi::AcpiCmd::SetBma => todo!(),
+                crate::acpi::AcpiCmd::GetSta => todo!(),
             }
-            // fg.get_dynamic_battery_cache().await;
         } else {
-            error!("Battery service: FG not found when trying to process ACPI cmd!");
+            error!("Battery service: malformed ACPI payload!");
         }
     }
 
-    async fn bix_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
+    async fn bix_handler(&self, _fg: impl crate::acpi::AcpiGettersGuarded, payload: &crate::acpi::Payload<'_>) {
         info!("Battery service: got BIX command!");
         let mut buf = [0u8; 69];
         if let Ok(payload_len) = payload.to_raw(&mut buf) {
@@ -413,17 +416,18 @@ impl Context {
         }
     }
 
-    async fn bst_handler(&self, fg: &Device, _payload: &crate::acpi::Payload<'_>) {
+    async fn bst_handler(&self, fg: &impl AcpiGettersGuarded, _payload: &crate::acpi::Payload<'_>) {
         info!("Battery service: got BST command!");
         let mut buf = [0u8; 69];
-        let cache = fg.get_dynamic_battery_cache().await;
-        let bst_data = acpi::compute_bst(&cache);
+        let dynamic_cache = fg.get_dynamic_cache_guarded().await;
+        let static_cache = fg.get_static_cache_guarded().await;
+        let bst_data = fg.compute_bst(dynamic_cache, static_cache);
         let response = crate::acpi::Payload {
             version: 1,
             instance: 1,
             reserved: 0,
             command: acpi::AcpiCmd::GetBst,
-            data: &bst_data,
+            data: &bst_data.to_bytes(),
         };
         if let Ok(payload_len) = response.to_raw(&mut buf) {
             info!("bst response: {:?}", &buf[..payload_len]);
@@ -439,9 +443,9 @@ impl Context {
         }
     }
 
-    fn get_fuel_gauge(&self, id: DeviceId) -> Option<&'static Device> {
+    fn get_fuel_gauge(&self, id: DeviceId) -> Option<&'static Device<DynamicMsgs, StaticMsgs>> {
         for device in &self.fuel_gauges {
-            if let Some(data) = device.data::<Device>() {
+            if let Some(data) = device.data::<Device<DynamicMsgs, StaticMsgs>>() {
                 if data.id() == id {
                     return Some(data);
                 }
@@ -453,7 +457,10 @@ impl Context {
     }
 
     /// Register fuel gauge device with the context instance.
-    pub async fn register_fuel_gauge(&self, device: &'static Device) -> Result<(), intrusive_list::Error> {
+    pub async fn register_fuel_gauge(
+        &self,
+        device: &'static Device<DynamicMsgs, StaticMsgs>,
+    ) -> Result<(), intrusive_list::Error> {
         if self.get_fuel_gauge(device.id()).is_some() {
             return Err(embedded_services::Error::NodeAlreadyInList);
         }
@@ -501,7 +508,8 @@ impl Context {
         id: DeviceId,
         command: device::Command,
     ) -> Result<device::Response, ContextError> {
-        // Get ID
+        // You must specify the types for DynamicMsgs and StaticMsgs here.
+        // If you have a common type, replace `YourDynamicMsgs` and `YourStaticMsgs` accordingly.
         let device = match self.get_fuel_gauge(id) {
             Some(device) => device,
             None => {
@@ -521,7 +529,7 @@ impl Context {
     }
 }
 
-impl Default for Context {
+impl<DynamicMsgs: Default + 'static, StaticMsgs: Default + 'static> Default for Context<DynamicMsgs, StaticMsgs> {
     fn default() -> Self {
         Self::new()
     }

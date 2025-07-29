@@ -9,14 +9,24 @@ use crate::{
 };
 
 /// Wrapper object to bind device to fuel gauge hardware driver.
-pub struct Wrapper<'a, C: Controller> {
-    device: &'a Device,
+pub struct Wrapper<'a, C, DynamicDeviceMsgs, StaticDeviceMsgs>
+where
+    C: Controller<DynamicMsgs = DynamicDeviceMsgs, StaticMsgs = StaticDeviceMsgs>,
+    DynamicDeviceMsgs: Default,
+    StaticDeviceMsgs: Default,
+{
+    device: &'a Device<DynamicDeviceMsgs, StaticDeviceMsgs>,
     controller: Mutex<GlobalRawMutex, C>,
 }
 
-impl<'a, C: Controller> Wrapper<'a, C> {
+impl<'a, C, DynamicDeviceMsgs, StaticDeviceMsgs> Wrapper<'a, C, DynamicDeviceMsgs, StaticDeviceMsgs>
+where
+    C: Controller<DynamicMsgs = DynamicDeviceMsgs, StaticMsgs = StaticDeviceMsgs>,
+    DynamicDeviceMsgs: Default,
+    StaticDeviceMsgs: Default,
+{
     /// Create a new fuel gauge wrapper.
-    pub fn new(device: &'a Device, controller: C) -> Self {
+    pub fn new(device: &'a Device<DynamicDeviceMsgs, StaticDeviceMsgs>, controller: C) -> Self {
         // Set device timeout when constructing.
         device.set_timeout(controller.get_timeout());
 
@@ -45,12 +55,22 @@ impl<'a, C: Controller> Wrapper<'a, C> {
         }
     }
 
-    async fn process_device_event(&self, _controller: &mut C, _device: &Device, event: ControllerEvent) {
+    async fn process_device_event(
+        &self,
+        _controller: &mut C,
+        _device: &Device<DynamicDeviceMsgs, StaticDeviceMsgs>,
+        event: ControllerEvent,
+    ) {
         // TODO: add events
         match event {}
     }
 
-    async fn process_context_command(&self, controller: &mut C, device: &Device, command: Command) {
+    async fn process_context_command(
+        &self,
+        controller: &mut C,
+        device: &Device<DynamicDeviceMsgs, StaticDeviceMsgs>,
+        command: Command,
+    ) {
         match command {
             Command::Initialize => match controller.initialize().await {
                 Ok(_) => {

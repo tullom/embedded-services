@@ -1,4 +1,7 @@
-use embassy_sync::{channel::Channel, mutex::Mutex};
+use embassy_sync::{
+    channel::Channel,
+    mutex::{Mutex, MutexGuard},
+};
 use embassy_time::Duration;
 use embedded_batteries_async::smart_battery::BatteryModeFields;
 use embedded_services::{GlobalRawMutex, Node, NodeContainer, SyncCell};
@@ -32,7 +35,7 @@ pub enum InternalResponse {
 pub type Response = Result<InternalResponse, FuelGaugeError>;
 
 /// Standard static battery data cache
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct StaticBatteryMsgs {
     /// Manufacturer Name.
@@ -113,17 +116,17 @@ pub struct DynamicBatteryMsgs {
 pub struct DeviceId(pub u8);
 
 /// Hardware agnostic device object to be registered with context.
-pub struct Device {
+pub struct Device<DynamicMsgs: Default, StaticMsgs: Default> {
     node: embedded_services::Node,
     id: DeviceId,
     command: Channel<GlobalRawMutex, Command, 1>,
     response: Channel<GlobalRawMutex, Response, 1>,
-    dynamic_battery_cache: Mutex<GlobalRawMutex, DynamicBatteryMsgs>,
-    static_battery_cache: Mutex<GlobalRawMutex, StaticBatteryMsgs>,
+    dynamic_battery_cache: Mutex<GlobalRawMutex, DynamicMsgs>,
+    static_battery_cache: Mutex<GlobalRawMutex, StaticMsgs>,
     timeout: SyncCell<Duration>,
 }
 
-impl Device {
+impl<DynamicMsgs: Default, StaticMsgs: Default> Device<DynamicMsgs, StaticMsgs> {
     pub fn new(id: DeviceId) -> Self {
         Self {
             node: embedded_services::Node::uninit(),
@@ -168,23 +171,23 @@ impl Device {
     }
 
     /// Set dynamic battery cache with updated values.
-    pub async fn set_dynamic_battery_cache(&self, new_values: DynamicBatteryMsgs) {
+    pub async fn set_dynamic_battery_cache(&self, new_values: DynamicMsgs) {
         *self.dynamic_battery_cache.lock().await = new_values;
     }
 
     /// Set static battery cache with updated values.
-    pub async fn set_static_battery_cache(&self, new_values: StaticBatteryMsgs) {
+    pub async fn set_static_battery_cache(&self, new_values: StaticMsgs) {
         *self.static_battery_cache.lock().await = new_values;
     }
 
     /// Get dynamic battery cache.
-    pub async fn get_dynamic_battery_cache(&self) -> DynamicBatteryMsgs {
-        *self.dynamic_battery_cache.lock().await
+    pub async fn get_dynamic_battery_cache(&self) -> MutexGuard<'_, GlobalRawMutex, DynamicMsgs> {
+        self.dynamic_battery_cache.lock().await
     }
 
     /// Get static battery cache.
-    pub async fn get_static_battery_cache(&self) -> StaticBatteryMsgs {
-        *self.static_battery_cache.lock().await
+    pub async fn get_static_battery_cache(&self) -> MutexGuard<'_, GlobalRawMutex, StaticMsgs> {
+        self.static_battery_cache.lock().await
     }
 
     /// Set device timeout.
@@ -198,7 +201,7 @@ impl Device {
     }
 }
 
-impl NodeContainer for Device {
+impl<DynamicMsgs: Default + 'static, StaticMsgs: Default + 'static> NodeContainer for Device<DynamicMsgs, StaticMsgs> {
     fn get_node(&self) -> &Node {
         &self.node
     }
