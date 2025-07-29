@@ -258,10 +258,11 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
             return pending().await;
         }
 
-        if let Some(ref mut streamer) = self.state.lock().await.port_event_streaming_state {
+        let streaming_state = self.state.lock().await.port_event_streaming_state;
+        if let Some(streamer) = streaming_state {
             // If we're converting the bitfields into an event stream yield first to prevent starving other tasks
             embassy_futures::yield_now().await;
-            Ok(*streamer)
+            Ok(streamer)
         } else {
             // We aren't in the process of converting the bitfields into an event stream
             // Wait for the next event
