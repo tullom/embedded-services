@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "embedded-usb-pd"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-usb-pd#d62451c0e7bf2121c51c03e70029830041a31c33"
+source = "git+https://github.com/OpenDevicePartnership/embedded-usb-pd#851d4848d0374253bbf961b159858cc7c69a0c67"
 dependencies = [
  "bincode",
  "bitfield 0.19.0",
@@ -1452,7 +1452,7 @@ dependencies = [
 [[package]]
 name = "tps6699x"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/tps6699x#be064f87475d5e42b6b134dce954558022aafab1"
+source = "git+https://github.com/OpenDevicePartnership/tps6699x#5f3f4db255b5351306fd45aa3d8e3d45faffdf5f"
 dependencies = [
  "bincode",
  "bitfield 0.19.0",

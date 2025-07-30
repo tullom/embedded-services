@@ -139,19 +139,19 @@ impl<'a, const N: usize, M: RawMutex, B: I2c> Tps6699x<'a, N, M, B> {
             if pdo_raw != 0 && rdo_raw != 0 {
                 // Got a valid explicit contract
                 if pd_status.is_source() {
-                    let pdo = source::Pdo::try_from(pdo_raw).map_err(Error::Pd)?;
+                    let pdo = source::Pdo::try_from(pdo_raw).map_err(|_| Error::from(PdError::InvalidParams))?;
                     let rdo = Rdo::for_pdo(rdo_raw, pdo);
                     debug!("PDO: {:#?}", pdo);
                     debug!("RDO: {:#?}", rdo);
                     port_status.available_source_contract = Some(PowerCapability::from(pdo));
-                    port_status.dual_power = pdo.is_dual_role();
+                    port_status.dual_power = pdo.dual_role_power();
                 } else {
-                    let pdo = sink::Pdo::try_from(pdo_raw).map_err(Error::Pd)?;
+                    let pdo = sink::Pdo::try_from(pdo_raw).map_err(|_| Error::from(PdError::InvalidParams))?;
                     let rdo = Rdo::for_pdo(rdo_raw, pdo);
                     debug!("PDO: {:#?}", pdo);
                     debug!("RDO: {:#?}", rdo);
                     port_status.available_sink_contract = Some(PowerCapability::from(pdo));
-                    port_status.dual_power = pdo.is_dual_role()
+                    port_status.dual_power = pdo.dual_role_power();
                 }
             } else if pd_status.is_source() {
                 // Implicit source contract
@@ -488,7 +488,7 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
             .tps6699x
             .try_lock()
             .expect("Driver should not have been locked before this, thus infallible");
-        tps6699x.get_rx_ado(port).await
+        tps6699x.get_rx_ado(port).await.map_err(Error::from)
     }
 
     async fn get_controller_status(&mut self) -> Result<ControllerStatus<'static>, Error<Self::BusError>> {
