@@ -170,6 +170,15 @@ mod test_controller {
             })
         }
 
+        async fn set_max_sink_voltage(
+            &mut self,
+            port: LocalPortId,
+            voltage_mv: Option<u16>,
+        ) -> Result<(), Error<Self::BusError>> {
+            debug!("Set max sink voltage for port{}: {:?}", port.0, voltage_mv);
+            Ok(())
+        }
+
         async fn get_rt_fw_update_status(
             &mut self,
             _port: LocalPortId,

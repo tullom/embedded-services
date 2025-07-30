@@ -592,6 +592,18 @@ impl<const N: usize, M: RawMutex, B: I2c> Controller for Tps6699x<'_, N, M, B> {
             Err(PdError::InvalidMode.into())
         }
     }
+
+    async fn set_max_sink_voltage(
+        &mut self,
+        port: LocalPortId,
+        voltage_mv: Option<u16>,
+    ) -> Result<(), Error<Self::BusError>> {
+        let mut tps6699x = self
+            .tps6699x
+            .try_lock()
+            .expect("Driver should not have been locked before this, thus infallible");
+        tps6699x.set_autonegotiate_sink_max_voltage(port, voltage_mv).await
+    }
 }
 
 impl<'a, const N: usize, M: RawMutex, B: I2c> Object<tps6699x_drv::Tps6699x<'a, M, B>> for Tps6699x<'a, N, M, B> {

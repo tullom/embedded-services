@@ -103,7 +103,7 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
     async fn process_give_content(
         &self,
         controller: &mut C,
-        state: &mut InternalState,
+        state: &mut InternalState<N>,
         content: &FwUpdateContentCommand,
     ) -> InternalResponseData {
         let data = &content.data[0..content.header.data_length as usize];
@@ -230,7 +230,7 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
     }
 
     /// Process a CFU tick
-    pub async fn process_cfu_tick(&self, controller: &mut C, state: &mut InternalState) {
+    pub async fn process_cfu_tick(&self, controller: &mut C, state: &mut InternalState<N>) {
         match state.fw_update_state {
             FwUpdateState::Idle => {
                 // No FW update in progress, nothing to do
@@ -273,7 +273,7 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
     pub async fn process_cfu_command(
         &self,
         controller: &mut C,
-        state: &mut InternalState,
+        state: &mut InternalState<N>,
         command: &RequestData,
     ) -> InternalResponseData {
         if state.fw_update_state == FwUpdateState::Recovery {

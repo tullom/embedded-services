@@ -81,6 +81,16 @@ impl PowerPolicy {
 
     async fn process_notify_disconnect(&self) -> Result<(), Error> {
         self.context.send_response(Ok(policy::ResponseData::Complete)).await;
+        if let Some(consumer) = self.state.lock().await.current_consumer_state.take() {
+            info!("Device{}: Connected consumer disconnected", consumer.device_id.0);
+            self.disconnect_chargers().await?;
+
+            self.comms_notify(CommsMessage {
+                data: CommsData::ConsumerDisconnected(consumer.device_id),
+            })
+            .await;
+        }
+
         self.update_current_consumer().await?;
         Ok(())
     }

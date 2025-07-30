@@ -51,6 +51,8 @@ pub struct PortStatus {
     pub alt_mode: AltMode,
     /// Power path status
     pub power_path: PowerPathStatus,
+    /// EPR mode active
+    pub epr: bool,
 }
 
 impl PortStatus {
@@ -67,6 +69,7 @@ impl PortStatus {
             data_role: DataRole::Dfp,
             alt_mode: AltMode::none(),
             power_path: PowerPathStatus::none(),
+            epr: false,
         }
     }
 
@@ -110,6 +113,8 @@ pub enum PortCommandData {
     SetRetimerCompliance,
     /// Get oldest unhandled PD alert
     GetPdAlert,
+    /// Set the maximum sink voltage in mV for the given port
+    SetMaxSinkVoltage(Option<u16>),
 }
 
 /// Port-specific commands
@@ -359,6 +364,14 @@ pub trait Controller {
     ) -> impl Future<Output = Result<ControllerStatus<'static>, Error<Self::BusError>>>;
     /// Get current PD alert
     fn get_pd_alert(&mut self, port: LocalPortId) -> impl Future<Output = Result<Option<Ado>, Error<Self::BusError>>>;
+    /// Set the maximum sink voltage for the given port
+    ///
+    /// This may trigger a renegotiation
+    fn set_max_sink_voltage(
+        &mut self,
+        port: LocalPortId,
+        voltage_mv: Option<u16>,
+    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
 
     // TODO: remove all these once we migrate to a generic FW update trait
     // https://github.com/OpenDevicePartnership/embedded-services/issues/242

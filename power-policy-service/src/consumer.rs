@@ -12,9 +12,9 @@ use super::*;
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct AvailableConsumer {
     /// The ID of the currently connected consumer
-    device_id: DeviceId,
+    pub device_id: DeviceId,
     /// The power capability of the currently connected consumer
-    consumer_power_capability: ConsumerPowerCapability,
+    pub consumer_power_capability: ConsumerPowerCapability,
 }
 
 /// Compare two consumer capabilities to determine which one is better
@@ -114,6 +114,24 @@ impl PowerPolicy {
         Ok(())
     }
 
+    /// Disconnect all chargers
+    pub(super) async fn disconnect_chargers(&self) -> Result<(), Error> {
+        for node in self.context.chargers().await {
+            let device = node.data::<ChargerDevice>().ok_or(Error::InvalidDevice)?;
+            if let embedded_services::power::policy::charger::ChargerResponseData::UnpoweredAck = device
+                .execute_command(PolicyEvent::PolicyConfiguration(PowerCapability {
+                    voltage_mv: 0,
+                    current_ma: 0,
+                }))
+                .await?
+            {
+                debug!("Charger is unpowered, continuing disconnect_chargers()...");
+            }
+        }
+
+        Ok(())
+    }
+
     /// Connect to a new consumer
     async fn connect_new_consumer(
         &self,
@@ -149,18 +167,7 @@ impl PowerPolicy {
             // Also, if chargers return UnpoweredAck, that means the charger isn't powered.
             // Further down this fn the power rails are enabled and thus the charger will get power,
             // so just continue execution.
-            for node in self.context.chargers().await {
-                let device = node.data::<ChargerDevice>().ok_or(Error::InvalidDevice)?;
-                if let embedded_services::power::policy::charger::ChargerResponseData::UnpoweredAck = device
-                    .execute_command(PolicyEvent::PolicyConfiguration(PowerCapability {
-                        voltage_mv: 0,
-                        current_ma: 0,
-                    }))
-                    .await?
-                {
-                    debug!("Charger is unpowered, continuing connect_new_consumer()...");
-                }
-            }
+            self.disconnect_chargers().await?;
 
             self.comms_notify(CommsMessage {
                 data: CommsData::ConsumerDisconnected(current_consumer.device_id),

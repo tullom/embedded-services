@@ -497,7 +497,7 @@ dependencies = [
 [[package]]
 name = "embassy-executor"
 version = "0.7.0"
-source = "git+https://github.com/embassy-rs/embassy#71b482e0a726242c92771bff246d9fdcce2627c4"
+source = "git+https://github.com/embassy-rs/embassy#e145a653cf9d31f101b0735406b8b7c9208bc1da"
 dependencies = [
  "cortex-m",
  "critical-section",
@@ -510,7 +510,7 @@ dependencies = [
 [[package]]
 name = "embassy-executor-macros"
 version = "0.6.2"
-source = "git+https://github.com/embassy-rs/embassy#71b482e0a726242c92771bff246d9fdcce2627c4"
+source = "git+https://github.com/embassy-rs/embassy#e145a653cf9d31f101b0735406b8b7c9208bc1da"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -576,7 +576,7 @@ dependencies = [
 [[package]]
 name = "embassy-sync"
 version = "0.7.0"
-source = "git+https://github.com/embassy-rs/embassy#71b482e0a726242c92771bff246d9fdcce2627c4"
+source = "git+https://github.com/embassy-rs/embassy#e145a653cf9d31f101b0735406b8b7c9208bc1da"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -591,7 +591,7 @@ dependencies = [
 [[package]]
 name = "embassy-time"
 version = "0.4.0"
-source = "git+https://github.com/embassy-rs/embassy#71b482e0a726242c92771bff246d9fdcce2627c4"
+source = "git+https://github.com/embassy-rs/embassy#e145a653cf9d31f101b0735406b8b7c9208bc1da"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -609,7 +609,7 @@ dependencies = [
 [[package]]
 name = "embassy-time-driver"
 version = "0.2.0"
-source = "git+https://github.com/embassy-rs/embassy#71b482e0a726242c92771bff246d9fdcce2627c4"
+source = "git+https://github.com/embassy-rs/embassy#e145a653cf9d31f101b0735406b8b7c9208bc1da"
 dependencies = [
  "document-features",
 ]
@@ -617,7 +617,7 @@ dependencies = [
 [[package]]
 name = "embassy-time-queue-utils"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/embassy#71b482e0a726242c92771bff246d9fdcce2627c4"
+source = "git+https://github.com/embassy-rs/embassy#e145a653cf9d31f101b0735406b8b7c9208bc1da"
 dependencies = [
  "embassy-executor",
  "heapless 0.8.0",
@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "embedded-usb-pd"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-usb-pd#bab2cb7299a386ff51fa9ab7b8e04145bc8f9b2f"
+source = "git+https://github.com/OpenDevicePartnership/embedded-usb-pd#d62451c0e7bf2121c51c03e70029830041a31c33"
 dependencies = [
  "bincode",
  "bitfield 0.19.0",
@@ -1452,7 +1452,7 @@ dependencies = [
 [[package]]
 name = "tps6699x"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/tps6699x#bbe0f3d75fd10143d0d079f85029ac8b7070adfa"
+source = "git+https://github.com/OpenDevicePartnership/tps6699x#be064f87475d5e42b6b134dce954558022aafab1"
 dependencies = [
  "bincode",
  "bitfield 0.19.0",

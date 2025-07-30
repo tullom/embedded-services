@@ -13,12 +13,9 @@ use super::*;
 
 impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> ControllerWrapper<'a, N, C, BACK, V> {
     /// Return the power device for the given port
-    pub(super) fn get_power_device(
-        &self,
-        port: LocalPortId,
-    ) -> Result<&policy::device::Device, Error<<C as Controller>::BusError>> {
+    pub(super) fn get_power_device(&self, port: LocalPortId) -> Result<&policy::device::Device, PdError> {
         if port.0 > N as u8 {
-            return PdError::InvalidPort.into();
+            return Err(PdError::InvalidPort);
         }
         Ok(&self.power[port.0 as usize])
     }
@@ -193,7 +190,7 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
     pub(super) async fn process_power_command(
         &self,
         controller: &mut C,
-        state: &mut InternalState,
+        state: &mut InternalState<N>,
         port: LocalPortId,
         command: &CommandData,
     ) -> InternalResponseData {

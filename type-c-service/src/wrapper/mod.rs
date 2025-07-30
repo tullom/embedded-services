@@ -3,8 +3,9 @@
 use core::array::from_fn;
 use core::future::{pending, Future};
 
-use embassy_futures::select::{select4, select_array, Either4};
+use embassy_futures::select::{select5, select_array, Either5};
 use embassy_sync::mutex::Mutex;
+use embassy_time::Instant;
 use embedded_cfu_protocol::protocol_definitions::{FwUpdateOffer, FwUpdateOfferResponse, FwVersion};
 use embedded_services::cfu::component::CfuDevice;
 use embedded_services::ipc::deferred;
@@ -34,18 +35,22 @@ pub const DEFAULT_FW_UPDATE_TICK_INTERVAL_MS: u64 = 5000;
 pub const DEFAULT_FW_UPDATE_TIMEOUT_TICKS: u8 = 60;
 
 /// Internal wrapper state
-pub struct InternalState {
+#[derive(Clone)]
+pub struct InternalState<const N: usize> {
     /// If we're currently doing a firmware update
     pub fw_update_state: cfu::FwUpdateState,
     /// State used to keep track of where we are as we turn the event bitfields into a stream of events
     port_event_streaming_state: Option<PortEventStreamer>,
+    /// Sink ready timeout values
+    sink_ready_deadline: [Option<Instant>; N],
 }
 
-impl Default for InternalState {
+impl<const N: usize> Default for InternalState<N> {
     fn default() -> Self {
         Self {
             fw_update_state: cfu::FwUpdateState::Idle,
             port_event_streaming_state: None,
+            sink_ready_deadline: [None; N],
         }
     }
 }
@@ -84,7 +89,7 @@ pub struct ControllerWrapper<'a, const N: usize, C: Controller, BACK: Backing<'a
     /// CFU device to interface with firmware update service
     cfu_device: CfuDevice,
     /// Internal state for the wrapper
-    state: Mutex<GlobalRawMutex, InternalState>,
+    state: Mutex<GlobalRawMutex, InternalState<N>>,
     controller: Mutex<GlobalRawMutex, C>,
     active_events: [SyncCell<PortEvent>; N],
     /// Trait object for validating firmware versions
@@ -176,6 +181,7 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
     async fn process_port_status_changed(
         &self,
         controller: &mut C,
+        state: &mut InternalState<N>,
         local_port_id: LocalPortId,
         status_event: PortStatusChanged,
     ) -> Result<(), Error<<C as Controller>::BusError>> {
@@ -195,7 +201,7 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
         let status = controller.get_port_status(local_port_id, true).await?;
         trace!("Port{} status: {:#?}", global_port_id.0, status);
 
-        let power = self.get_power_device(local_port_id)?;
+        let power = self.get_power_device(local_port_id).map_err(Error::Pd)?;
         trace!("Port{} status events: {:#?}", global_port_id.0, status_event);
         if status_event.plug_inserted_or_removed() {
             self.process_plug_event(controller, power, local_port_id, &status)
@@ -212,6 +218,15 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
             self.process_new_provider_contract(global_port_id, power, &status)
                 .await?;
         }
+
+        self.check_sink_ready_timeout(
+            state,
+            &status,
+            local_port_id,
+            status_event.new_power_contract_as_consumer(),
+            status_event.sink_ready(),
+        )
+        .await?;
 
         self.active_events[port_index].set(event.union(status_event.into()));
 
@@ -276,16 +291,17 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
         loop {
             let event = {
                 let mut controller = self.controller.lock().await;
-                select4(
+                select5(
                     self.wait_port_pending(&mut controller),
                     self.wait_power_command(),
                     self.pd_controller.receive(),
                     self.wait_cfu_command(),
+                    self.wait_sink_ready_timeout(),
                 )
                 .await
             };
             match event {
-                Either4::First(stream) => {
+                Either5::First(stream) => {
                     let mut stream = stream?;
                     if let Some((port_id, event)) = stream
                         .next(async |port_id| {
@@ -323,9 +339,17 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
                         self.state.lock().await.port_event_streaming_state = None;
                     }
                 }
-                Either4::Second((port, request)) => return Ok(Event::PowerPolicyCommand(port, request)),
-                Either4::Third(request) => return Ok(Event::ControllerCommand(request)),
-                Either4::Fourth(event) => return Ok(Event::CfuEvent(event)),
+                Either5::Second((port, request)) => return Ok(Event::PowerPolicyCommand(port, request)),
+                Either5::Third(request) => return Ok(Event::ControllerCommand(request)),
+                Either5::Fourth(event) => return Ok(Event::CfuEvent(event)),
+                Either5::Fifth(port) => {
+                    // Sink ready timeout event
+                    debug!("Port{0}: Sink ready timeout", port.0);
+                    self.state.lock().await.sink_ready_deadline[port.0 as usize] = None;
+                    let mut event = PortStatusChanged::none();
+                    event.set_sink_ready(true);
+                    return Ok(Event::PortStatusChanged(port, event));
+                }
             }
         }
     }
@@ -337,7 +361,7 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
         let mut state = self.state.lock().await;
         match event {
             Event::PortStatusChanged(port_id, status_event) => {
-                self.process_port_status_changed(&mut controller, port_id, status_event)
+                self.process_port_status_changed(&mut controller, &mut state, port_id, status_event)
                     .await
             }
             Event::PowerPolicyCommand(port, request) => {
