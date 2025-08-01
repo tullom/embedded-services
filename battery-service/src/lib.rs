@@ -7,6 +7,7 @@ use embassy_futures::select::select;
 use embassy_sync::once_lock::OnceLock;
 use embedded_services::{
     comms::{self, EndpointID},
+    ec_type::message::AcpiMsgComms,
     error, info,
 };
 
@@ -17,12 +18,12 @@ pub mod device;
 pub mod wrapper;
 
 /// Standard Battery Service.
-pub struct Service {
+pub struct Service<'a> {
     pub endpoint: comms::Endpoint,
-    pub context: context::Context,
+    pub context: context::Context<'a>,
 }
 
-impl Service {
+impl<'a> Service<'a> {
     /// Create a new battery service instance.
     pub fn new() -> Self {
         Service {
@@ -47,21 +48,21 @@ impl Service {
 
         match select(self.context.wait_event(), self.context.wait_acpi_cmd()).await {
             embassy_futures::select::Either::First(event) => self.context.process(event).await,
-            embassy_futures::select::Either::Second((raw, payload_len)) => {
+            embassy_futures::select::Either::Second(acpi_msg) => {
                 info!("Battery service: ACPI cmd recvd");
-                self.context.process_acpi_cmd((&raw, payload_len)).await
+                self.context.process_acpi_cmd(acpi_msg).await
             }
         }
     }
 }
 
-impl Default for Service {
+impl<'a> Default for Service<'a> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl comms::MailboxDelegate for Service {
+impl<'a> comms::MailboxDelegate for Service<'a> {
     fn receive(&self, message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
         if let Some(event) = message.data.get::<BatteryEvent>() {
             self.context.send_event_no_wait(*event).map_err(|e| match e {
@@ -69,8 +70,8 @@ impl comms::MailboxDelegate for Service {
             })?
         }
 
-        if let Some(acpi_cmd) = message.data.get::<([u8; 69], usize)>() {
-            self.context.send_acpi_cmd(*acpi_cmd);
+        if let Some(acpi_cmd) = message.data.get::<AcpiMsgComms>() {
+            self.context.send_acpi_cmd(acpi_cmd.clone());
         }
 
         Ok(())

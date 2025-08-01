@@ -1,11 +1,11 @@
-use core::ops::Deref;
+use core::{borrow::BorrowMut, ops::Deref};
 
 use embedded_batteries_async::acpi::{
     BCT_RETURN_SIZE_BYTES, BMD_RETURN_SIZE_BYTES, BPC_RETURN_SIZE_BYTES, BPS_RETURN_SIZE_BYTES, BST_RETURN_SIZE_BYTES,
     BTM_RETURN_SIZE_BYTES, Bct, BctReturnResult, BixReturn, Bma, BmcControlFlags, Btm, BtmReturnResult,
     PSR_RETURN_SIZE_BYTES, Pif, PowerSourceState, PowerUnit, PsrReturn, STA_RETURN_SIZE_BYTES,
 };
-use embedded_services::{debug, error, info, trace};
+use embedded_services::{debug, ec_type::message::AcpiMsgComms, error, info, trace};
 
 use crate::device::{Device, DynamicBatteryMsgs, StaticBatteryMsgs};
 
@@ -213,14 +213,19 @@ pub(crate) fn compute_pif<'a>(static_cache: &'a StaticBatteryMsgs, _dynamic_cach
     }
 }
 
-impl crate::context::Context {
+embedded_services::define_static_buffer!(acpi_buf, u8, [0u8; 69]);
+
+impl<'a> crate::context::Context<'a> {
     async fn send_acpi_response(&self, payload: &crate::acpi::Payload<'_>) -> Result<(), ()> {
-        let mut buf = [0u8; 69];
-        if let Ok(payload_len) = payload.to_raw(&mut buf) {
-            trace!("response: {:?}", &buf[..payload_len]);
+        if let Ok(payload_len) = payload.to_raw(acpi_buf::get_mut().unwrap().borrow_mut().borrow_mut()) {
+            // trace!("response: {:?}", &buf[..payload_len]);
+            let acpi_response = AcpiMsgComms {
+                payload: acpi_buf::get(),
+                payload_len,
+            };
             super::comms_send(
                 crate::EndpointID::External(embedded_services::comms::External::Host),
-                &(buf, payload_len),
+                &acpi_response,
             )
             .await
             .unwrap();

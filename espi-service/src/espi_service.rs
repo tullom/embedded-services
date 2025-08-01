@@ -1,19 +1,21 @@
 use core::mem::offset_of;
 use core::slice;
 
+use core::borrow::{Borrow, BorrowMut};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::once_lock::OnceLock;
 use embassy_sync::signal::Signal;
 use embedded_services::comms::{self, EndpointID, External, Internal};
+use embedded_services::ec_type::message::AcpiMsgComms;
 use embedded_services::{GlobalRawMutex, ec_type, error, info};
 
-pub struct Service<'a> {
+pub struct Service<'a, 'b> {
     endpoint: comms::Endpoint,
     ec_memory: Mutex<GlobalRawMutex, &'a mut ec_type::structure::ECMemory>,
-    comms_signal: Signal<GlobalRawMutex, ([u8; 69], usize)>,
+    comms_signal: Signal<GlobalRawMutex, AcpiMsgComms<'b>>,
 }
 
-impl Service<'_> {
+impl Service<'_, '_> {
     pub fn new(ec_memory: &'static mut ec_type::structure::ECMemory) -> Self {
         Service {
             endpoint: comms::Endpoint::uninit(EndpointID::External(External::Host)),
@@ -119,11 +121,11 @@ impl Service<'_> {
     }
 }
 
-impl comms::MailboxDelegate for Service<'_> {
+impl comms::MailboxDelegate for Service<'_, '_> {
     fn receive(&self, message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
-        if let Some(msg) = message.data.get::<([u8; 69], usize)>() {
-            info!("Espi service: recvd acpi response: {:?}", msg);
-            self.comms_signal.signal(*msg);
+        if let Some(msg) = message.data.get::<AcpiMsgComms>() {
+            info!("Espi service: recvd acpi response");
+            self.comms_signal.signal(msg.clone());
         }
         // let mut memory_map = self
         //     .ec_memory
@@ -264,6 +266,8 @@ pub async fn espi_service(mut espi: espi::Espi<'static>, memory_map_buffer: &'st
         .await
         .unwrap();
 
+    embedded_services::define_static_buffer!(acpi_buf, u8, [0u8; 69]);
+
     loop {
         let event = espi.wait_for_event().await;
         match event {
@@ -290,7 +294,6 @@ pub async fn espi_service(mut espi: espi::Espi<'static>, memory_map_buffer: &'st
                 espi.complete_port(port_event.port).await;
             }
             Ok(espi::Event::OOBEvent(port_event)) => {
-                let mut payload = [0u8; 69];
                 info!(
                     "eSPI OOBEvent Port: {}, direction: {}, address: {}, offset: {}, length: {}",
                     port_event.port, port_event.direction, port_event.offset, port_event.base_addr, port_event.length,
@@ -303,23 +306,24 @@ pub async fn espi_service(mut espi: espi::Espi<'static>, memory_map_buffer: &'st
                     #[cfg(feature = "defmt")]
                     info!("OOB message: {:02X}", &src_slice[0..]);
 
-                    match handle_mctp_header(&src_slice, &mut payload) {
+                    match handle_mctp_header(&src_slice, acpi_buf::get_mut().unwrap().borrow_mut().borrow_mut()) {
                         Ok((endpoint, payload_len)) => {
-                            info!("payload: {:?}, payload len: {:?}", payload, payload_len);
-                            espi_service
-                                .endpoint
-                                .send(endpoint, &(payload, payload_len))
-                                .await
-                                .unwrap();
+                            let acpi_msg = AcpiMsgComms {
+                                payload: acpi_buf::get(),
+                                payload_len,
+                            };
+                            espi_service.endpoint.send(endpoint, &acpi_msg).await.unwrap();
                         }
                         Err(e) => error!("MCTP packet malformed: {:?}", e),
                     }
 
                     info!("MCTP packet sent!");
 
-                    let (raw_response_data, response_data_size) = espi_service.comms_signal.wait().await;
+                    let acpi_response = espi_service.comms_signal.wait().await;
 
-                    let (final_packet, final_packet_size) = build_mctp_header(&raw_response_data, response_data_size);
+                    let response_len = acpi_response.payload_len;
+                    let (final_packet, final_packet_size) =
+                        build_mctp_header(acpi_response.payload.borrow().borrow(), response_len);
 
                     info!("Sending MCTP response: {:?}", final_packet[..final_packet_size]);
 
