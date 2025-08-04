@@ -7,6 +7,7 @@ use embassy_sync::once_lock::OnceLock;
 use embassy_sync::signal::Signal;
 use embedded_services::comms::{self, EndpointID, External, Internal};
 use embedded_services::ec_type::message::AcpiMsgComms;
+use embedded_services::ec_type::protocols::mctp::{build_mctp_header, handle_mctp_header};
 use embedded_services::{GlobalRawMutex, ec_type, error, info};
 
 pub struct Service<'a, 'b> {
@@ -149,95 +150,6 @@ impl comms::MailboxDelegate for Service<'_, '_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-enum MctpError {
-    InvalidHeaderSize,
-    WrongDestinationAddr,
-    InvalidCommandCode,
-    InvalidByteCount,
-    InvalidHeaderVersion,
-    InvalidDestinationEndpoint,
-    InvalidSourceEndpoint,
-    /// Multi message not supported
-    InvalidFlags,
-}
-
-type PayloadLen = usize;
-
-fn handle_mctp_header(mctp_msg: &[u8], data: &mut [u8]) -> Result<(EndpointID, PayloadLen), MctpError> {
-    info!("Test1");
-    // assert we have at least 9 bytes, minimum
-    if mctp_msg.len() < 9 {
-        return Err(MctpError::InvalidHeaderSize);
-    }
-
-    // EC is at address 2, if we have anything other than 2 reject it.
-    if mctp_msg[0] != 2 {
-        return Err(MctpError::WrongDestinationAddr);
-    }
-
-    // MCTP command code is 0x0F.
-    if mctp_msg[1] != 0x0F {
-        return Err(MctpError::InvalidCommandCode);
-    }
-
-    // Check the byte count is correctly formed and is not larger than the max in the spec.
-    if usize::from(mctp_msg[2]) != mctp_msg.len() - 3 || mctp_msg[2] > 69 {
-        return Err(MctpError::InvalidByteCount);
-    }
-
-    // Only support header version 1.
-    if mctp_msg[4] != 1 {
-        return Err(MctpError::InvalidHeaderVersion);
-    }
-
-    // Only subsystem supported currently is battery (2).
-    let endpoint_id = match mctp_msg[5] {
-        2 => EndpointID::Internal(Internal::Battery),
-        _ => return Err(MctpError::InvalidDestinationEndpoint),
-    };
-
-    // Only source endpoint supported currently is host (1).
-    if mctp_msg[6] != 1 {
-        return Err(MctpError::InvalidSourceEndpoint);
-    }
-
-    let som = mctp_msg[7] & (1 << 7) != 0;
-    let eom = mctp_msg[7] & (1 << 6) != 0;
-    let seq_num = (mctp_msg[7] & 0b0011_0000) >> 4;
-    let msg_tag = mctp_msg[7] & 0b0000_0111;
-
-    // Verify flags
-    if !som || !eom || seq_num != 1 || msg_tag != 3 {
-        return Err(MctpError::InvalidFlags);
-    }
-
-    info!("Test2");
-
-    data[..usize::from(mctp_msg[2]) - 5].copy_from_slice(&mctp_msg[8..]);
-
-    info!("Test3");
-
-    Ok((endpoint_id, usize::from(mctp_msg[2]) - 5))
-}
-
-fn build_mctp_header(data: &[u8], data_len: usize) -> ([u8; 69 + 3], usize) {
-    let mut ret = [0u8; 69 + 3];
-
-    ret[0] = 0;
-    ret[1] = 0x0F;
-    ret[2] = (data_len + 5) as u8;
-    ret[3] = 3;
-    ret[4] = 1;
-    ret[5] = 1;
-    ret[6] = 2;
-    ret[7] = 0xD3;
-    ret[8..data_len + 8].copy_from_slice(&data[..data_len]);
-
-    (ret, data_len + 5 + 3)
-}
-
 static ESPI_SERVICE: OnceLock<Service> = OnceLock::new();
 
 use embassy_imxrt::espi;
@@ -314,45 +226,52 @@ pub async fn espi_service(mut espi: espi::Espi<'static>, memory_map_buffer: &'st
                             let acpi_msg = AcpiMsgComms {
                                 payload: acpi_buf::get(),
                                 payload_len,
+                                endpoint,
                             };
                             espi_service.endpoint.send(endpoint, &acpi_msg).await.unwrap();
+                            info!("MCTP packet sent!");
+
+                            let acpi_response = espi_service.comms_signal.wait().await;
+
+                            let response_len = acpi_response.payload_len;
+                            let endpoint = acpi_response.endpoint;
+                            if let Ok((final_packet, final_packet_size)) =
+                                build_mctp_header(acpi_response.payload.borrow().borrow(), response_len, endpoint)
+                            {
+                                info!("Sending MCTP response: {:?}", &final_packet[..final_packet_size]);
+
+                                let result = unsafe { espi.oob_get_write_buffer(port_event.port) };
+
+                                match result {
+                                    Ok(dest_slice) => {
+                                        dest_slice[..final_packet_size]
+                                            .copy_from_slice(&final_packet[..final_packet_size]);
+                                    }
+                                    Err(_e) => {
+                                        #[cfg(feature = "defmt")]
+                                        error!("Failed to retrieve OOB write buffer: {}", _e);
+                                        espi.complete_port(port_event.port).await;
+                                        continue;
+                                    }
+                                }
+
+                                // Don't complete event until we read out OOB data
+                                espi.complete_port(port_event.port).await;
+
+                                // Test code send same data on loopback
+                                let res = espi.oob_write_data(port_event.port, final_packet_size as u8);
+
+                                if res.is_err() {
+                                    #[cfg(feature = "defmt")]
+                                    error!("eSPI OOB write failed: {}", res.err().unwrap());
+                                }
+                            } else {
+                                #[cfg(feature = "defmt")]
+                                error!("Error building MCTP response packet from service {:?}", endpoint);
+                            }
                         }
+                        // Packet malformed, throw it away
                         Err(e) => error!("MCTP packet malformed: {:?}", e),
-                    }
-
-                    info!("MCTP packet sent!");
-
-                    let acpi_response = espi_service.comms_signal.wait().await;
-
-                    let response_len = acpi_response.payload_len;
-                    let (final_packet, final_packet_size) =
-                        build_mctp_header(acpi_response.payload.borrow().borrow(), response_len);
-
-                    info!("Sending MCTP response: {:?}", &final_packet[..final_packet_size]);
-
-                    let result = unsafe { espi.oob_get_write_buffer(port_event.port) };
-
-                    match result {
-                        Ok(dest_slice) => {
-                            dest_slice[..final_packet_size].copy_from_slice(&final_packet[..final_packet_size]);
-                        }
-                        Err(_e) => {
-                            #[cfg(feature = "defmt")]
-                            error!("Failed to retrieve OOB write buffer: {}", _e);
-                            espi.complete_port(port_event.port).await;
-                            continue;
-                        }
-                    }
-
-                    // Don't complete event until we read out OOB data
-                    espi.complete_port(port_event.port).await;
-
-                    // Test code send same data on loopback
-                    let res = espi.oob_write_data(port_event.port, final_packet_size as u8);
-
-                    if res.is_err() {
-                        #[cfg(feature = "defmt")]
-                        error!("eSPI OOB write failed: {}", res.err().unwrap());
                     }
                 } else {
                     espi.complete_port(port_event.port).await;

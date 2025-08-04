@@ -73,6 +73,8 @@ pub struct AcpiMsgComms<'a> {
     pub payload: crate::buffer::SharedRef<'a, u8>,
     /// Size of payload
     pub payload_len: usize,
+    /// Endpoint ID
+    pub endpoint: crate::comms::EndpointID,
 }
 
 /// ACPI Message, holding an owned reference to a buffer
