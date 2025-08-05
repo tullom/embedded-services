@@ -128,7 +128,6 @@ impl comms::MailboxDelegate for Service<'_, '_> {
             info!("Espi service: recvd acpi response");
             self.comms_signal.signal(msg.clone());
         } else {
-            // TODO: Suspected deadlock here. Fix
             let mut memory_map = self
                 .ec_memory
                 .try_lock()
