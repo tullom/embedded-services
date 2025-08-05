@@ -183,6 +183,8 @@ pub async fn espi_service(mut espi: espi::Espi<'static>, memory_map_buffer: &'st
 
     embedded_services::define_static_buffer!(acpi_buf, u8, [0u8; 69]);
 
+    let owned_ref = acpi_buf::get_mut().unwrap();
+
     loop {
         let event = espi.wait_for_event().await;
         match event {
@@ -221,57 +223,65 @@ pub async fn espi_service(mut espi: espi::Espi<'static>, memory_map_buffer: &'st
                     #[cfg(feature = "defmt")]
                     info!("OOB message: {:02X}", &src_slice[0..]);
 
-                    match handle_mctp_header(src_slice, acpi_buf::get_mut().unwrap().borrow_mut().borrow_mut()) {
-                        Ok((endpoint, payload_len)) => {
-                            let acpi_msg = AcpiMsgComms {
-                                payload: acpi_buf::get(),
-                                payload_len,
-                                endpoint,
-                            };
-                            espi_service.endpoint.send(endpoint, &acpi_msg).await.unwrap();
-                            info!("MCTP packet sent!");
+                    let acpi_msg: AcpiMsgComms;
 
-                            let acpi_response = espi_service.comms_signal.wait().await;
-
-                            let response_len = acpi_response.payload_len;
-                            let endpoint = acpi_response.endpoint;
-                            if let Ok((final_packet, final_packet_size)) =
-                                build_mctp_header(acpi_response.payload.borrow().borrow(), response_len, endpoint)
-                            {
-                                info!("Sending MCTP response: {:?}", &final_packet[..final_packet_size]);
-
-                                let result = unsafe { espi.oob_get_write_buffer(port_event.port) };
-
-                                match result {
-                                    Ok(dest_slice) => {
-                                        dest_slice[..final_packet_size]
-                                            .copy_from_slice(&final_packet[..final_packet_size]);
-                                    }
-                                    Err(_e) => {
-                                        #[cfg(feature = "defmt")]
-                                        error!("Failed to retrieve OOB write buffer: {}", _e);
-                                        espi.complete_port(port_event.port).await;
-                                        continue;
-                                    }
-                                }
-
-                                // Don't complete event until we read out OOB data
-                                espi.complete_port(port_event.port).await;
-
-                                // Test code send same data on loopback
-                                let res = espi.oob_write_data(port_event.port, final_packet_size as u8);
-
-                                if res.is_err() {
-                                    #[cfg(feature = "defmt")]
-                                    error!("eSPI OOB write failed: {}", res.err().unwrap());
-                                }
-                            } else {
-                                #[cfg(feature = "defmt")]
-                                error!("Error building MCTP response packet from service {:?}", endpoint);
+                    {
+                        let mut access = owned_ref.borrow_mut();
+                        match handle_mctp_header(src_slice, access.borrow_mut()) {
+                            Ok((endpoint, payload_len)) => {
+                                acpi_msg = AcpiMsgComms {
+                                    payload: acpi_buf::get(),
+                                    payload_len,
+                                    endpoint,
+                                };
+                            }
+                            Err(e) => {
+                                // Packet malformed, throw it away
+                                error!("MCTP packet malformed: {:?}", e);
+                                continue;
                             }
                         }
-                        // Packet malformed, throw it away
-                        Err(e) => error!("MCTP packet malformed: {:?}", e),
+                    }
+
+                    espi_service.endpoint.send(acpi_msg.endpoint, &acpi_msg).await.unwrap();
+                    info!("MCTP packet forwarded to service: {:?}", acpi_msg.endpoint);
+
+                    let acpi_response = espi_service.comms_signal.wait().await;
+
+                    let response_len = acpi_response.payload_len;
+                    let endpoint = acpi_response.endpoint;
+                    if let Ok((final_packet, final_packet_size)) =
+                        build_mctp_header(acpi_response.payload.borrow().borrow(), response_len, endpoint)
+                    {
+                        info!("Sending MCTP response: {:?}", &final_packet[..final_packet_size]);
+
+                        let result = unsafe { espi.oob_get_write_buffer(port_event.port) };
+
+                        match result {
+                            Ok(dest_slice) => {
+                                dest_slice[..final_packet_size].copy_from_slice(&final_packet[..final_packet_size]);
+                            }
+                            Err(_e) => {
+                                #[cfg(feature = "defmt")]
+                                error!("Failed to retrieve OOB write buffer: {}", _e);
+                                espi.complete_port(port_event.port).await;
+                                continue;
+                            }
+                        }
+
+                        // Don't complete event until we read out OOB data
+                        espi.complete_port(port_event.port).await;
+
+                        // Test code send same data on loopback
+                        let res = espi.oob_write_data(port_event.port, final_packet_size as u8);
+
+                        if res.is_err() {
+                            #[cfg(feature = "defmt")]
+                            error!("eSPI OOB write failed: {}", res.err().unwrap());
+                        }
+                    } else {
+                        #[cfg(feature = "defmt")]
+                        error!("Error building MCTP response packet from service {:?}", endpoint);
                     }
                 } else {
                     espi.complete_port(port_event.port).await;
