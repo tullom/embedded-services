@@ -1,5 +1,5 @@
-use crate::device::Device;
 use crate::device::{self, DeviceId};
+use crate::device::{Device, FuelGaugeError};
 use embassy_sync::channel::Channel;
 use embassy_sync::channel::TrySendError;
 use embassy_sync::mutex::Mutex;
@@ -93,6 +93,7 @@ pub enum ContextError {
     DeviceNotFound,
     Timeout,
     StateError(StateMachineError),
+    DriverError(FuelGaugeError),
 }
 
 /// External battery service context response.
@@ -273,20 +274,18 @@ impl<'a> Context<'a> {
         match *state {
             State::NotPresent => {
                 info!("Initializing fuel gauge with ID {:?}", event.device_id);
-                if self
+                if let Err(e) = self
                     .execute_device_command(event.device_id, device::Command::Ping)
                     .await
-                    .is_err()
                 {
-                    error!("Error pinging fuel gauge with ID {:?}", event.device_id);
+                    error!("Error pinging fuel gauge with ID {:?}, {:?}", event.device_id, e);
                     return Err(StateMachineError::DeviceError);
                 }
-                if self
+                if let Err(e) = self
                     .execute_device_command(event.device_id, device::Command::Initialize)
                     .await
-                    .is_err()
                 {
-                    error!("Error initializing fuel gauge with ID {:?}", event.device_id);
+                    error!("Error initializing fuel gauge with ID {:?}, {:?}", event.device_id, e);
                     return Err(StateMachineError::DeviceError);
                 }
 
@@ -300,14 +299,14 @@ impl<'a> Context<'a> {
                         .execute_device_command(event.device_id, device::Command::Ping)
                         .await
                     {
-                        Ok(Ok(device::InternalResponse::Complete)) => {
+                        Ok(device::InternalResponse::Complete) => {
                             info!("Fuel gauge id: {:?} re-established communication!", event.device_id);
                             *state = State::Present(PresentSubstate::Operational(OperationalSubstate::Init));
                             self.set_state_machine_retry_count(0);
                             Ok(InnerStateMachineResponse::Complete)
                             // Do not continue execution.
                         }
-                        Ok(Err(fg_err)) => {
+                        Err(ContextError::DriverError(fg_err)) => {
                             error!(
                                 "Fuel gauge {:?} failed to ping with error {:?}",
                                 event.device_id, fg_err
@@ -341,12 +340,14 @@ impl<'a> Context<'a> {
                     OperationalSubstate::Init => {
                         // Collect static data
                         trace!("Collecting fuel gauge static cache with ID {:?}", event.device_id);
-                        if self
+                        if let Err(e) = self
                             .execute_device_command(event.device_id, device::Command::UpdateStaticCache)
                             .await
-                            .is_err()
                         {
-                            error!("Error updating fuel gauge static cache with ID {:?}", event.device_id);
+                            error!(
+                                "Error updating fuel gauge static cache with ID {:?}, {:?}",
+                                event.device_id, e
+                            );
                             return Err(StateMachineError::DeviceError);
                         }
                         *state = State::Present(PresentSubstate::Operational(OperationalSubstate::Polling));
@@ -355,14 +356,13 @@ impl<'a> Context<'a> {
                     OperationalSubstate::Polling => {
                         // Collect dynamic data
                         trace!("Collecting fuel gauge dynamic cache with ID {:?}", event.device_id);
-                        if self
+                        if let Err(e) = self
                             .execute_device_command(event.device_id, device::Command::UpdateDynamicCache)
                             .await
-                            .is_err()
                         {
                             error!(
-                                "Error initializing fuel gauge dynamic cache with ID {:?}",
-                                event.device_id
+                                "Error initializing fuel gauge dynamic cache with ID {:?}, {:?}",
+                                event.device_id, e
                             );
                             return Err(StateMachineError::DeviceError);
                         }
@@ -465,7 +465,7 @@ impl<'a> Context<'a> {
         &self,
         id: DeviceId,
         command: device::Command,
-    ) -> Result<device::Response, ContextError> {
+    ) -> Result<device::InternalResponse, ContextError> {
         // Get ID
         let device = match self.get_fuel_gauge(id) {
             Some(device) => device,
@@ -477,7 +477,10 @@ impl<'a> Context<'a> {
         };
 
         match with_timeout(device.get_timeout(), device.execute_command(command)).await {
-            Ok(res) => Ok(res),
+            Ok(res) => match res {
+                Ok(response) => Ok(response),
+                Err(e) => Err(ContextError::DriverError(e)),
+            },
             Err(_) => {
                 error!("Device timed out when executing command {:?}", command);
                 Err(ContextError::Timeout)

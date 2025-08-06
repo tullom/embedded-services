@@ -9,7 +9,7 @@ use embedded_batteries_async::{
 };
 use embedded_services::{GlobalRawMutex, Node, NodeContainer, SyncCell};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 /// Device errors.
 pub enum FuelGaugeError {

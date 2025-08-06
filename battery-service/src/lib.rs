@@ -7,9 +7,8 @@ use embassy_futures::select::select;
 use embassy_sync::once_lock::OnceLock;
 use embedded_services::{
     comms::{self, EndpointID},
-    debug,
     ec_type::message::AcpiMsgComms,
-    error, info,
+    error, info, trace,
 };
 
 mod acpi;
@@ -42,15 +41,39 @@ impl<'a> Service<'a> {
     }
 
     /// Main battery service processing function.
-    pub async fn process(&self) {
+    pub async fn process_next(&self) {
+        let event = self.wait_next().await;
+        self.process_event(event).await
+    }
+
+    /// Wait for next event.
+    pub async fn wait_next(&self) -> Event<'a> {
         match select(self.context.wait_event(), self.context.wait_acpi_cmd()).await {
-            embassy_futures::select::Either::First(event) => self.context.process(event).await,
-            embassy_futures::select::Either::Second(acpi_msg) => {
-                debug!("Battery service: ACPI cmd recvd");
+            embassy_futures::select::Either::First(event) => Event::StateMachine(event),
+            embassy_futures::select::Either::Second(acpi_msg) => Event::AcpiRequest(acpi_msg),
+        }
+    }
+
+    /// Process battery service event.
+    pub async fn process_event(&self, event: Event<'a>) {
+        match event {
+            Event::StateMachine(event) => {
+                trace!("Battery service: state machine event recvd {:?}", event);
+                self.context.process(event).await
+            }
+            Event::AcpiRequest(acpi_msg) => {
+                trace!("Battery service: ACPI cmd recvd");
                 self.context.process_acpi_cmd(acpi_msg).await
             }
         }
     }
+}
+
+#[derive(Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Event<'a> {
+    StateMachine(BatteryEvent),
+    AcpiRequest(AcpiMsgComms<'a>),
 }
 
 impl<'a> Default for Service<'a> {
@@ -137,6 +160,6 @@ pub async fn task() {
     }
 
     loop {
-        service.process().await;
+        service.process_next().await;
     }
 }
