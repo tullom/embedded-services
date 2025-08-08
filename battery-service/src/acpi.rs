@@ -5,9 +5,12 @@ use embedded_batteries_async::acpi::{
     BTM_RETURN_SIZE_BYTES, Bct, BctReturnResult, BixReturn, Bma, BmcControlFlags, Btm, BtmReturnResult,
     PSR_RETURN_SIZE_BYTES, Pif, PowerSourceState, PowerUnit, PsrReturn, STA_RETURN_SIZE_BYTES,
 };
-use embedded_services::{debug, ec_type::message::AcpiMsgComms, error, info, trace};
+use embedded_services::{debug, ec_type::message::AcpiMsgComms, error, info, power::policy::PowerCapability, trace};
 
-use crate::device::{Device, DynamicBatteryMsgs, StaticBatteryMsgs};
+use crate::{
+    context::PsuState,
+    device::{Device, DynamicBatteryMsgs, StaticBatteryMsgs},
+};
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct Payload<'a> {
@@ -194,20 +197,30 @@ pub(crate) fn compute_sta(sta_return: &mut embedded_batteries_async::acpi::StaRe
     *sta_return = embedded_batteries_async::acpi::StaReturn::all();
 }
 
-pub(crate) fn compute_psr(psr_return: &mut embedded_batteries_async::acpi::PsrReturn) {
-    // TODO: Grab real values from power policy
-    psr_return.power_source = embedded_batteries_async::acpi::PowerSource::Online;
+pub(crate) fn compute_psr(psr_return: &mut embedded_batteries_async::acpi::PsrReturn, psu_state: &PsuState) {
+    // TODO: Refactor to check if battery if force discharged,
+    // which should give an offline result even when the PSU is attached.
+    psr_return.power_source = if psu_state.psu_connected {
+        embedded_batteries_async::acpi::PowerSource::Online
+    } else {
+        embedded_batteries_async::acpi::PowerSource::Offline
+    };
 }
 
-pub(crate) fn compute_pif<'a>(static_cache: &'a StaticBatteryMsgs, _dynamic_cache: &'a DynamicBatteryMsgs) -> Pif<'a> {
+pub(crate) fn compute_pif<'a>(psu_state: &PsuState) -> Pif<'a> {
     // TODO: Grab real values from power policy
+    let capability = psu_state.power_capability.unwrap_or(PowerCapability {
+        voltage_mv: 0,
+        current_ma: 0,
+    });
+
     Pif {
         power_source_state: PowerSourceState::empty(),
-        max_output_power: 0xFFFF_FFFF,
-        max_input_power: 0xFFFF_FFFF,
-        model_number: &static_cache.device_name[..7],
-        serial_number: &static_cache.serial_num,
-        oem_info: &static_cache.manufacturer_name[..7],
+        max_output_power: capability.max_power_mw(),
+        max_input_power: capability.max_power_mw(),
+        model_number: &[],
+        serial_number: &[],
+        oem_info: &[],
     }
 }
 
@@ -306,7 +319,7 @@ impl<'a> crate::context::Context<'a> {
 
         let mut psr_data = PsrReturn::default();
 
-        compute_psr(&mut psr_data);
+        compute_psr(&mut psr_data, &self.get_power_info().await);
 
         let psr_data: &[u8; PSR_RETURN_SIZE_BYTES] = zerocopy::transmute_ref!(&psr_data);
 
@@ -321,13 +334,11 @@ impl<'a> crate::context::Context<'a> {
         self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn pif_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
+    pub(super) async fn pif_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got PIF command!");
         // Enough space for all string fields to have 7 bytes + 1 null terminator byte
         let mut pif_data = [0u8; 36];
-        let static_cache_guard = fg.get_static_battery_cache_guarded().await;
-        let dynamic_cache_guard = fg.get_dynamic_battery_cache_guarded().await;
-        let pif_return = compute_pif(static_cache_guard.deref(), dynamic_cache_guard.deref());
+        let pif_return = compute_pif(&self.get_power_info().await);
 
         let model_num_size = pif_return.model_number.len();
         let serial_num_size = pif_return.serial_number.len();
@@ -335,10 +346,6 @@ impl<'a> crate::context::Context<'a> {
         pif_return
             .to_bytes(&mut pif_data, model_num_size, serial_num_size, oem_info_size)
             .unwrap_or_else(|_| error!("Computing PIF return failed!"));
-
-        // Drop locks before next await point to eliminate possibility of deadlock
-        drop(static_cache_guard);
-        drop(dynamic_cache_guard);
 
         let response = crate::acpi::Payload {
             version: 1,
