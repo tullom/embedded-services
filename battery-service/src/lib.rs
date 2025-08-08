@@ -88,10 +88,10 @@ impl<'a> comms::MailboxDelegate for Service<'a> {
             self.context.send_event_no_wait(*event).map_err(|e| match e {
                 embassy_sync::channel::TrySendError::Full(_) => comms::MailboxDelegateError::BufferFull,
             })?
-        }
-
-        if let Some(acpi_cmd) = message.data.get::<AcpiMsgComms>() {
+        } else if let Some(acpi_cmd) = message.data.get::<AcpiMsgComms>() {
             self.context.send_acpi_cmd(acpi_cmd.clone());
+        } else if let Some(power_policy_msg) = message.data.get::<embedded_services::power::policy::CommsMessage>() {
+            self.context.set_power_info(&power_policy_msg.data)?;
         }
 
         Ok(())

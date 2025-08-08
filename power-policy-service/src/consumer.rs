@@ -239,6 +239,13 @@ impl PowerPolicy {
         let best_consumer = self.find_best_consumer().await?;
         info!("Best consumer: {:#?}", best_consumer);
         if best_consumer.is_none() {
+            // Notify disconnect if recently detached consumer was previously attached.
+            if let Some(consumer_state) = state.current_consumer_state {
+                self.comms_notify(CommsMessage {
+                    data: CommsData::ConsumerDisconnected(consumer_state.device_id),
+                })
+                .await;
+            }
             // No new consumer available
             state.current_consumer_state = None;
             self.update_unconstrained_state(state).await?;

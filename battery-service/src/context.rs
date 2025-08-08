@@ -7,7 +7,9 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, with_timeout};
 use embedded_services::GlobalRawMutex;
 use embedded_services::buffer::OwnedRef;
+use embedded_services::comms::MailboxDelegateError;
 use embedded_services::ec_type::message::AcpiMsgComms;
+use embedded_services::power::policy::PowerCapability;
 use embedded_services::{IntrusiveList, debug, error, info, intrusive_list, trace, warn};
 
 use core::borrow::Borrow;
@@ -107,6 +109,13 @@ pub struct BatteryEvent {
     pub device_id: DeviceId,
 }
 
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub(crate) struct PsuState {
+    pub psu_connected: bool,
+    pub power_capability: Option<PowerCapability>,
+}
+
 /// Battery service context, hardware agnostic state.
 pub struct Context<'a> {
     fuel_gauges: IntrusiveList,
@@ -117,6 +126,7 @@ pub struct Context<'a> {
     config: Config,
     acpi_request: Signal<GlobalRawMutex, AcpiMsgComms<'a>>,
     acpi_buf_owned_ref: OwnedRef<'a, u8>,
+    power_info: Mutex<GlobalRawMutex, PsuState>,
 }
 
 pub struct Config {
@@ -147,6 +157,7 @@ impl<'a> Context<'a> {
             config: Default::default(),
             acpi_request: Signal::new(),
             acpi_buf_owned_ref: acpi_buf::get_mut().unwrap(),
+            power_info: Mutex::new(PsuState::default()),
         }
     }
 
@@ -160,6 +171,7 @@ impl<'a> Context<'a> {
             config,
             acpi_request: Signal::new(),
             acpi_buf_owned_ref: acpi_buf::get_mut().unwrap(),
+            power_info: Mutex::new(PsuState::default()),
         }
     }
 
@@ -490,6 +502,42 @@ impl<'a> Context<'a> {
 
     pub(crate) fn get_acpi_buf_owned_ref(&self) -> &OwnedRef<'a, u8> {
         &self.acpi_buf_owned_ref
+    }
+
+    pub(crate) async fn get_power_info(&self) -> PsuState {
+        *self.power_info.lock().await
+    }
+
+    pub(crate) fn set_power_info(
+        &self,
+        power_info: &embedded_services::power::policy::CommsData,
+    ) -> Result<(), MailboxDelegateError> {
+        let mut guard = self
+            .power_info
+            .try_lock()
+            .map_err(|_| MailboxDelegateError::BufferFull)?;
+
+        let psu_state = guard.deref_mut();
+
+        match power_info {
+            embedded_services::power::policy::CommsData::ConsumerDisconnected(_) => {
+                *psu_state = PsuState {
+                    psu_connected: false,
+                    power_capability: None,
+                }
+            }
+            embedded_services::power::policy::CommsData::ConsumerConnected(_device_id, power_capability) => {
+                *psu_state = PsuState {
+                    psu_connected: true,
+                    power_capability: Some(*power_capability),
+                }
+            }
+            embedded_services::power::policy::CommsData::Unconstrained(_) => { /* Don't care about Unconstrained state */
+            }
+        }
+
+        trace!("Battery: PSU state: {:?}", psu_state);
+        Ok(())
     }
 }
 
