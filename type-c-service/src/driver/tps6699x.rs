@@ -238,7 +238,9 @@ impl<'a, const N: usize, M: RawMutex, B: I2c> Tps6699x<'a, N, M, B> {
         &self,
         tps6699x: &mut tps6699x_drv::Tps6699x<'a, M, B>,
     ) -> Result<(), Error<B::Error>> {
-        let interrupts = tps6699x.wait_interrupt(false, |_, _| true).await;
+        let interrupts = tps6699x
+            .wait_interrupt_any(false, from_fn(|_| IntEventBus1::all()))
+            .await;
 
         for (interrupt, mutex) in zip(interrupts.iter(), self.port_events.iter()) {
             if *interrupt == IntEventBus1::new_zero() {
