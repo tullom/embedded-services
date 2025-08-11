@@ -159,8 +159,9 @@ impl<'a, const N: usize, C: Controller, BACK: Backing<'a>, V: FwOfferValidator> 
                 }
             }
             controller::PortCommandData::ClearEvents => {
-                let event = self.active_events[0].get();
-                self.active_events[0].set(PortEvent::none());
+                let port_index = local_port.0 as usize;
+                let event = self.active_events[port_index].get();
+                self.active_events[port_index].set(PortEvent::none());
                 Ok(controller::PortResponseData::ClearEvents(event))
             }
             controller::PortCommandData::RetimerFwUpdateGetState => {
