@@ -231,7 +231,7 @@ pub(crate) fn compute_pif<'a>(psu_state: &PsuState) -> Pif<'a> {
 }
 
 impl<'a> crate::context::Context<'a> {
-    async fn send_acpi_response(&self, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    async fn send_acpi_response(&self, payload: &crate::acpi::Payload<'_>) {
         let acpi_response: AcpiMsgComms;
 
         {
@@ -241,20 +241,12 @@ impl<'a> crate::context::Context<'a> {
                 acpi_response = AcpiMsgComms {
                     payload: crate::context::acpi_buf::get(),
                     payload_len,
-                    endpoint: embedded_services::comms::EndpointID::Internal(
-                        embedded_services::comms::Internal::Battery,
-                    ),
-                    port_id,
                 };
             } else {
                 error!("payload to_raw error, sending empty response");
                 acpi_response = AcpiMsgComms {
                     payload: crate::context::acpi_buf::get(),
                     payload_len: 0,
-                    endpoint: embedded_services::comms::EndpointID::Internal(
-                        embedded_services::comms::Internal::Battery,
-                    ),
-                    port_id,
                 };
             }
         }
@@ -269,7 +261,7 @@ impl<'a> crate::context::Context<'a> {
         debug!("response sent to espi_service");
     }
 
-    pub(super) async fn bix_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bix_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BIX command!");
         // Enough space for all string fields to have 7 bytes + 1 null terminator byte
         let mut bix_data = [0u8; 100];
@@ -303,10 +295,10 @@ impl<'a> crate::context::Context<'a> {
             data: &bix_data,
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn bst_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bst_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BST command!");
         let cache = fg.get_dynamic_battery_cache().await;
         let mut bst_data = embedded_batteries_async::acpi::BstReturn::default();
@@ -319,10 +311,10 @@ impl<'a> crate::context::Context<'a> {
             command: payload.command,
             data: bst_data,
         };
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn psr_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn psr_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got PSR command!");
 
         let mut psr_data = PsrReturn::default();
@@ -339,10 +331,10 @@ impl<'a> crate::context::Context<'a> {
             data: psr_data,
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn pif_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn pif_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got PIF command!");
         // Enough space for all string fields to have 7 bytes + 1 null terminator byte
         let mut pif_data = [0u8; 36];
@@ -363,10 +355,10 @@ impl<'a> crate::context::Context<'a> {
             data: &pif_data,
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn bps_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bps_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BPS command!");
 
         let mut bps_data = embedded_batteries_async::acpi::Bps::default();
@@ -382,10 +374,10 @@ impl<'a> crate::context::Context<'a> {
             command: payload.command,
             data: bps_data,
         };
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn btp_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn btp_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BTP command!");
 
         // TODO: Save trip point
@@ -401,10 +393,10 @@ impl<'a> crate::context::Context<'a> {
             data: &[],
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn bpt_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bpt_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BPT command!");
 
         // 0 for success, 1 for failure
@@ -429,10 +421,10 @@ impl<'a> crate::context::Context<'a> {
             data: &[],
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn bpc_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bpc_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BPC command!");
 
         let mut bpc_data = embedded_batteries_async::acpi::Bpc::default();
@@ -449,10 +441,10 @@ impl<'a> crate::context::Context<'a> {
             data: bpc_data,
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn bmc_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bmc_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BMC command!");
 
         // 0 for success, 1 for failure
@@ -477,10 +469,10 @@ impl<'a> crate::context::Context<'a> {
             data: &[],
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn bmd_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bmd_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BMD command!");
         let mut bmd_data = embedded_batteries_async::acpi::Bmd::default();
         let static_cache = fg.get_static_battery_cache().await;
@@ -496,10 +488,10 @@ impl<'a> crate::context::Context<'a> {
             data: bmd_data,
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn bct_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bct_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BCT command!");
 
         let mut ret_status = 1;
@@ -528,10 +520,10 @@ impl<'a> crate::context::Context<'a> {
             data: bct_return,
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn btm_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn btm_handler(&self, fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BTM command!");
 
         let mut ret_status = 1;
@@ -560,10 +552,10 @@ impl<'a> crate::context::Context<'a> {
             data: btm_return,
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn bms_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bms_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BMS command!");
 
         let mut ret_status = 1;
@@ -588,10 +580,10 @@ impl<'a> crate::context::Context<'a> {
             data: &u32::to_le_bytes(u32::from(ret_status)),
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn bma_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn bma_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got BMA command!");
 
         let mut ret_status = 1;
@@ -618,10 +610,10 @@ impl<'a> crate::context::Context<'a> {
             data: &u32::to_le_bytes(u32::from(ret_status)),
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 
-    pub(super) async fn sta_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>, port_id: u8) {
+    pub(super) async fn sta_handler(&self, _fg: &Device, payload: &crate::acpi::Payload<'_>) {
         trace!("Battery service: got STA command!");
 
         let mut sta_data = embedded_batteries_async::acpi::StaReturn::default();
@@ -637,6 +629,6 @@ impl<'a> crate::context::Context<'a> {
             data: sta_data,
         };
 
-        self.send_acpi_response(&response, port_id).await;
+        self.send_acpi_response(&response).await;
     }
 }

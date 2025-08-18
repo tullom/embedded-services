@@ -73,10 +73,6 @@ pub struct AcpiMsgComms<'a> {
     pub payload: crate::buffer::SharedRef<'a, u8>,
     /// Size of payload
     pub payload_len: usize,
-    /// Endpoint ID
-    pub endpoint: crate::comms::EndpointID,
-    /// Port id
-    pub port_id: u8,
 }
 
 /// ACPI Message, holding an owned reference to a buffer
@@ -92,8 +88,6 @@ pub struct AcpiMsg<'a> {
 pub struct NotificationMsg {
     /// Interrupt offset
     pub offset: u8,
-    /// Endpoint ID
-    pub endpoint: crate::comms::EndpointID,
 }
 
 #[allow(missing_docs)]

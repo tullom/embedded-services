@@ -10,16 +10,22 @@ use embedded_services::buffer::OwnedRef;
 use embedded_services::comms::{self, EndpointID, External, Internal};
 use embedded_services::ec_type::message::{AcpiMsgComms, HostMsg, NotificationMsg};
 use embedded_services::ec_type::protocols::mctp::{build_mctp_header, handle_mctp_header};
-use embedded_services::{GlobalRawMutex, ec_type, error, info};
+use embedded_services::{GlobalRawMutex, debug, ec_type, error, info};
 
 const HOST_TX_QUEUE_SIZE: usize = 5;
 
+// OOB port number for NXP IMXRT
+// REVISIT: When adding support for other platforms, refactor this as they don't have a notion of port IDs
+const OOB_PORT_ID: usize = 1;
+
 embedded_services::define_static_buffer!(acpi_buf, u8, [0u8; 69]);
+
+type HostMsgInternal<'a> = (EndpointID, HostMsg<'a>);
 
 pub struct Service<'a, 'b> {
     endpoint: comms::Endpoint,
     ec_memory: Mutex<GlobalRawMutex, &'a mut ec_type::structure::ECMemory>,
-    host_tx_queue: Channel<GlobalRawMutex, HostMsg<'b>, HOST_TX_QUEUE_SIZE>,
+    host_tx_queue: Channel<GlobalRawMutex, HostMsgInternal<'b>, HOST_TX_QUEUE_SIZE>,
     acpi_buf_owned_ref: OwnedRef<'a, u8>,
 }
 
@@ -129,14 +135,15 @@ impl Service<'_, '_> {
         Ok(())
     }
 
-    async fn wait_for_subsystem_msg(&self) -> HostMsg<'_> {
+    async fn wait_for_subsystem_msg(&self) -> HostMsgInternal<'_> {
         self.host_tx_queue.receive().await
     }
 
-    async fn process_subsystem_msg(&self, espi: &mut espi::Espi<'_>, host_msg: HostMsg<'_>) {
+    async fn process_subsystem_msg(&self, espi: &mut espi::Espi<'_>, host_msg: HostMsgInternal<'_>) {
+        let (endpoint, host_msg) = host_msg;
         match host_msg {
             HostMsg::Notification(notification_msg) => self.process_notification_to_host(espi, &notification_msg).await,
-            HostMsg::Response(acpi_msg_comms) => self.process_response_to_host(espi, &acpi_msg_comms).await,
+            HostMsg::Response(acpi_msg_comms) => self.process_response_to_host(espi, &acpi_msg_comms, endpoint).await,
         }
     }
 
@@ -145,16 +152,20 @@ impl Service<'_, '_> {
         info!("espi: Notification id {} sent to Host!", notification.offset);
     }
 
-    async fn process_response_to_host(&self, espi: &mut espi::Espi<'_>, acpi_response: &AcpiMsgComms<'_>) {
+    async fn process_response_to_host(
+        &self,
+        espi: &mut espi::Espi<'_>,
+        acpi_response: &AcpiMsgComms<'_>,
+        endpoint: EndpointID,
+    ) {
         let response_len = acpi_response.payload_len;
-        let endpoint = acpi_response.endpoint;
         if let Ok((final_packet, final_packet_size)) =
             build_mctp_header(acpi_response.payload.borrow().borrow(), response_len, endpoint)
         {
-            info!("Sending MCTP response: {:?}", &final_packet[..final_packet_size]);
+            debug!("Sending MCTP response: {:?}", &final_packet[..final_packet_size]);
 
             // SAFETY: Safe as the access to espi is protected by a mut reference.
-            let result = unsafe { espi.oob_get_write_buffer(acpi_response.port_id.into()) };
+            let result = unsafe { espi.oob_get_write_buffer(OOB_PORT_ID) };
 
             match result {
                 Ok(dest_slice) => {
@@ -169,7 +180,7 @@ impl Service<'_, '_> {
             }
 
             // Write response over OOB
-            let res = espi.oob_write_data(acpi_response.port_id.into(), final_packet_size as u8);
+            let res = espi.oob_write_data(OOB_PORT_ID, final_packet_size as u8);
 
             if res.is_err() {
                 #[cfg(feature = "defmt")]
@@ -178,7 +189,7 @@ impl Service<'_, '_> {
         } else {
             // Packet malformed, throw it away and respond with ACPI packet with error in reserved field.
             error!("Error building MCTP response packet from service {:?}", endpoint);
-            send_mctp_error_response(espi, acpi_response.port_id.into()).await;
+            send_mctp_error_response(espi, OOB_PORT_ID).await;
         }
     }
 }
@@ -186,8 +197,9 @@ impl Service<'_, '_> {
 impl comms::MailboxDelegate for Service<'_, '_> {
     fn receive(&self, message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
         if let Some(msg) = message.data.get::<HostMsg>() {
-            info!("Espi service: recvd acpi response");
-            if self.host_tx_queue.try_send(msg.clone()).is_err() {
+            let host_msg = (message.from, msg.clone());
+            debug!("Espi service: recvd acpi response");
+            if self.host_tx_queue.try_send(host_msg).is_err() {
                 return Err(comms::MailboxDelegateError::BufferFull);
             }
         } else {
@@ -295,20 +307,20 @@ async fn process_controller_event(
                 let src_slice = unsafe { slice::from_raw_parts(port_event.base_addr as *const u8, port_event.length) };
 
                 #[cfg(feature = "defmt")]
-                info!("OOB message: {:02X}", &src_slice[0..]);
+                debug!("OOB message: {:02X}", &src_slice[0..]);
 
                 let acpi_msg: AcpiMsgComms;
+                let endpoint: EndpointID;
 
                 {
                     let mut access = espi_service.acpi_buf_owned_ref.borrow_mut();
                     match handle_mctp_header(src_slice, access.borrow_mut()) {
-                        Ok((endpoint, payload_len)) => {
+                        Ok((raw_endpoint, payload_len)) => {
                             acpi_msg = AcpiMsgComms {
                                 payload: acpi_buf::get(),
                                 payload_len,
-                                endpoint,
-                                port_id: port_event.port as u8,
                             };
+                            endpoint = raw_endpoint;
                         }
                         Err(e) => {
                             // Packet malformed, throw it away and respond with ACPI packet with error in reserved field.
@@ -321,9 +333,9 @@ async fn process_controller_event(
                     }
                 }
 
-                espi_service.endpoint.send(acpi_msg.endpoint, &acpi_msg).await.unwrap();
-                info!("MCTP packet forwarded to service: {:?}", acpi_msg.endpoint);
                 espi.complete_port(port_event.port).await;
+                espi_service.endpoint.send(endpoint, &acpi_msg).await.unwrap();
+                info!("MCTP packet forwarded to service: {:?}", endpoint);
             } else {
                 espi.complete_port(port_event.port).await;
             }
