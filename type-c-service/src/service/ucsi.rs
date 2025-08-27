@@ -176,8 +176,6 @@ impl<'a> Service<'a> {
                         response.cci.set_cmd_complete(true);
                     }
                     PpmOutput::OpmNotifyReset => {
-                        // Always notify OPM on reset
-                        notify_opm = true;
                         response.cci.set_reset_complete(true);
                     }
                     PpmOutput::OpmNotifyBusy => {
