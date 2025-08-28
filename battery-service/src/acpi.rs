@@ -22,8 +22,8 @@ use crate::{
 pub(crate) struct Payload<'a> {
     pub version: u8,
     pub instance: u8,
-    pub reserved: u8,
-    pub command: AcpiCmd,
+    pub command: embedded_services::ec_type::protocols::acpi::BatteryCmd,
+    pub completion_code: u8,
     pub data: &'a [u8],
 }
 

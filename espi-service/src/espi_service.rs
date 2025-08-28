@@ -346,6 +346,31 @@ async fn process_controller_event(
 
                 {
                     let mut access = espi_service.acpi_buf_owned_ref.borrow_mut();
+
+                    let mut mctp_ctx = mctp_rs::MctpPacketContext::new(
+                        mctp_rs::medium::smbus_espi::SmbusEspiMedium,
+                        access.borrow_mut(),
+                    );
+
+                    match mctp_ctx.receive_packet(src_slice) {
+                        Ok(Some(message)) => {
+                            // Complete message received
+                            match message.header_and_body {
+                                mctp_rs::MctpMessageHeaderAndBody::Control { header, body } => {
+                                    // Handle MCTP control message
+                                    header.
+                                }
+                                _ => todo!(),
+                            }
+                        }
+                        Ok(None) => {
+                            // Partial message, waiting for more packets
+                        }
+                        Err(_e) => {
+                            // Handle protocol or medium error
+                        }
+                    }
+
                     match handle_mctp_header(src_slice, access.borrow_mut()) {
                         Ok((raw_endpoint, payload_len)) => {
                             acpi_msg = AcpiMsgComms {
