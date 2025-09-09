@@ -1806,6 +1806,7 @@ dependencies = [
  "embedded-io-async",
  "embedded-services",
  "embedded-usb-pd",
+ "heapless 0.8.0",
  "log",
  "static_cell",
  "tps6699x",

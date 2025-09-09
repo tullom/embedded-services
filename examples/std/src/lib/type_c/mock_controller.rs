@@ -200,7 +200,7 @@ impl embedded_services::type_c::controller::Controller for Controller<'_> {
         Ok(())
     }
 
-    async fn get_active_fw_version(&self) -> Result<u32, Error<Self::BusError>> {
+    async fn get_active_fw_version(&mut self) -> Result<u32, Error<Self::BusError>> {
         Ok(0)
     }
 

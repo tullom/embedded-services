@@ -568,7 +568,7 @@ pub trait Controller {
     // TODO: remove all these once we migrate to a generic FW update trait
     // https://github.com/OpenDevicePartnership/embedded-services/issues/242
     /// Get current FW version
-    fn get_active_fw_version(&self) -> impl Future<Output = Result<u32, Error<Self::BusError>>>;
+    fn get_active_fw_version(&mut self) -> impl Future<Output = Result<u32, Error<Self::BusError>>>;
     /// Start a firmware update
     fn start_fw_update(&mut self) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
     /// Abort a firmware update
