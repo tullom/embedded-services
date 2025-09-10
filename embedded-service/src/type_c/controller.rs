@@ -241,6 +241,14 @@ impl Default for UsbControlConfig {
     }
 }
 
+/// Thunderbolt control configuration
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Default, Copy, PartialEq)]
+pub struct TbtConfig {
+    /// Enable Thunderbolt
+    pub tbt_enabled: bool,
+}
+
 /// Port-specific command data
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -281,6 +289,8 @@ pub enum PortCommandData {
     SetDpConfig(DpConfig),
     /// Execute DisplayPort reset
     ExecuteDrst,
+    /// Set Thunderbolt configuration
+    SetTbtConfig(TbtConfig),
 }
 
 /// Port-specific commands
@@ -609,6 +619,13 @@ pub trait Controller {
     ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
     /// Execute PD Data Reset for the given port
     fn execute_drst(&mut self, port: LocalPortId) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
+
+    /// Set Thunderbolt configuration for the given port
+    fn set_tbt_config(
+        &mut self,
+        port: LocalPortId,
+        config: TbtConfig,
+    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
 }
 
 /// Internal context for managing PD controllers
@@ -1111,6 +1128,17 @@ impl ContextToken {
     /// Execute PD Data Reset for the given port
     pub async fn execute_drst(&self, port: GlobalPortId) -> Result<(), PdError> {
         match self.send_port_command(port, PortCommandData::ExecuteDrst).await? {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set Thunderbolt configuration for the given port
+    pub async fn set_tbt_config(&self, port: GlobalPortId, config: TbtConfig) -> Result<(), PdError> {
+        match self
+            .send_port_command(port, PortCommandData::SetTbtConfig(config))
+            .await?
+        {
             PortResponseData::Complete => Ok(()),
             _ => Err(PdError::InvalidResponse),
         }

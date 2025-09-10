@@ -15,7 +15,8 @@ use embedded_hal_async::i2c::I2c;
 use embedded_services::cfu::component::CfuDevice;
 use embedded_services::power::policy::{self, PowerCapability};
 use embedded_services::type_c::controller::{
-    self, AttnVdm, Controller, ControllerStatus, DpPinConfig, OtherVdm, PortStatus, SendVdm, UsbControlConfig,
+    self, AttnVdm, Controller, ControllerStatus, DpPinConfig, OtherVdm, PortStatus, SendVdm, TbtConfig,
+    UsbControlConfig,
 };
 use embedded_services::type_c::event::PortEvent;
 use embedded_services::type_c::{ControllerId, ATTN_VDM_LEN};
@@ -715,6 +716,17 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
                 Err(Error::Pd(PdError::InvalidResponse))
             }
         }
+    }
+
+    async fn set_tbt_config(&mut self, port: LocalPortId, config: TbtConfig) -> Result<(), Error<Self::BusError>> {
+        debug!("Port{} setting TBT config: {:#?}", port.0, config);
+
+        let mut config_reg = self.tps6699x.lock_inner().await.get_tbt_config(port).await?;
+
+        config_reg.set_tbt_vid_en(config.tbt_enabled);
+        config_reg.set_tbt_mode_en(config.tbt_enabled);
+
+        self.tps6699x.lock_inner().await.set_tbt_config(port, config_reg).await
     }
 }
 
