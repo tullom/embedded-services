@@ -132,8 +132,22 @@ pub enum Command {
 pub struct UcsiResponse {
     /// Notify the OPM, the function call
     pub notify_opm: bool,
-    /// UCSI response
-    pub response: ucsi::GlobalResponse,
+    /// Response CCI
+    pub cci: ucsi::cci::GlobalCci,
+    /// UCSI response data
+    pub data: Result<Option<ucsi::ResponseData>, PdError>,
+}
+
+/// Alias to help simplify conversion into a result
+pub type UcsiResponseResult = Result<ucsi::GlobalResponse, PdError>;
+
+impl From<UcsiResponse> for UcsiResponseResult {
+    fn from(value: UcsiResponse) -> Self {
+        match value.data {
+            Ok(data) => Ok(ucsi::GlobalResponse { cci: value.cci, data }),
+            Err(err) => Err(err),
+        }
+    }
 }
 
 /// External command response for type-C service
@@ -145,7 +159,7 @@ pub enum Response<'a> {
     /// Controller command response
     Controller(ControllerResponse<'a>),
     /// UCSI command response
-    Ucsi(Result<UcsiResponse, PdError>),
+    Ucsi(UcsiResponse),
 }
 
 /// Get the status of the given port.
@@ -327,7 +341,7 @@ pub async fn reconfigure_retimer(port: GlobalPortId) -> Result<(), PdError> {
 }
 
 /// Execute a UCSI command
-pub async fn execute_ucsi_command(command: ucsi::GlobalCommand) -> Result<UcsiResponse, PdError> {
+pub async fn execute_ucsi_command(command: ucsi::GlobalCommand) -> UcsiResponse {
     execute_external_ucsi_command(command).await
 }
 

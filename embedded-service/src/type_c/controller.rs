@@ -1174,15 +1174,18 @@ pub(super) async fn execute_external_controller_command(
 }
 
 /// Execute an external UCSI command
-pub(super) async fn execute_external_ucsi_command(
-    command: ucsi::GlobalCommand,
-) -> Result<external::UcsiResponse, PdError> {
+pub(super) async fn execute_external_ucsi_command(command: ucsi::GlobalCommand) -> external::UcsiResponse {
     let context = CONTEXT.get().await;
     match context.external_command.execute(external::Command::Ucsi(command)).await {
         external::Response::Ucsi(response) => response,
         r => {
             error!("Invalid response: expected external UCSI, got {:?}", r);
-            Err(PdError::InvalidResponse)
+            external::UcsiResponse {
+                // Always notify OPM of an error
+                notify_opm: true,
+                cci: ucsi::cci::GlobalCci::new_error(),
+                data: Err(PdError::InvalidResponse),
+            }
         }
     }
 }
