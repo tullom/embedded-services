@@ -21,6 +21,7 @@ heapless.workspace = true
 uuid.workspace = true
 embedded-fans-async = "0.2.0"
 embedded-sensors-hal-async = "0.3.0"
+mctp-rs = { workspace = true, features = ["espi", "odp"] }
 
 [features]
 default = []
@@ -32,6 +33,7 @@ defmt = [
     "embassy-executor/defmt",
     "embedded-fans-async/defmt",
     "embedded-sensors-hal-async/defmt",
+    "mctp-rs/defmt",
 ]
 log = [
     "dep:log",

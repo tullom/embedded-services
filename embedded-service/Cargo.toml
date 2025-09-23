@@ -30,6 +30,10 @@ embedded-usb-pd.workspace = true
 heapless.workspace = true
 log = { workspace = true, optional = true }
 
+[dependencies.mctp-rs]
+workspace = true
+features = ["espi", "odp"]
+
 [dependencies.serde]
 workspace = true
 features = ["serde_derive"]
@@ -58,6 +62,7 @@ defmt = [
     "embassy-time/defmt",
     "embedded-usb-pd/defmt",
     "embedded-cfu-protocol/defmt",
+    "mctp-rs/defmt",
 ]
 log = [
     "dep:log",
