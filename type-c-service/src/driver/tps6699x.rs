@@ -23,6 +23,7 @@ use embedded_usb_pd::ado::Ado;
 use embedded_usb_pd::pdinfo::PowerPathStatus;
 use embedded_usb_pd::pdo::{sink, source, Common, Rdo};
 use embedded_usb_pd::type_c::Current as TypecCurrent;
+use embedded_usb_pd::ucsi::lpm;
 use embedded_usb_pd::{DataRole, Error, LocalPortId, PdError, PlugOrientation, PowerRole};
 use tps6699x::asynchronous::embassy as tps6699x_drv;
 use tps6699x::asynchronous::fw_update::UpdateTarget;
@@ -725,6 +726,13 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
         config_reg.set_tbt_mode_en(config.tbt_enabled);
 
         self.tps6699x.lock_inner().await.set_tbt_config(port, config_reg).await
+    }
+
+    async fn execute_ucsi_command(
+        &mut self,
+        command: lpm::LocalCommand,
+    ) -> Result<Option<lpm::ResponseData>, Error<Self::BusError>> {
+        self.tps6699x.execute_ucsi_command(&command).await
     }
 }
 

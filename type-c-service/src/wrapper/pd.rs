@@ -5,7 +5,7 @@ use embedded_services::debug;
 use embedded_services::type_c::controller::{InternalResponseData, Response};
 use embedded_services::type_c::Cached;
 use embedded_usb_pd::constants::{T_SRC_TRANS_REQ_EPR_MS, T_SRC_TRANS_REQ_SPR_MS};
-use embedded_usb_pd::ucsi;
+use embedded_usb_pd::ucsi::{self, lpm};
 
 use super::*;
 
@@ -189,6 +189,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
 
         let local_port = self.registration.pd_controller.lookup_local_port(command.port);
         if local_port.is_err() {
+            debug!("Invalid port: {:?}", command.port);
             return controller::Response::Port(Err(PdError::InvalidPort));
         }
 
@@ -345,6 +346,17 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
                         Error::Pd(e) => Err(e),
                     },
                 }
+            }
+            controller::PortCommandData::ExecuteUcsiCommand(command_data) => {
+                Ok(controller::PortResponseData::UcsiResponse(
+                    controller
+                        .execute_ucsi_command(lpm::Command::new(local_port, command_data))
+                        .await
+                        .map_err(|e| match e {
+                            Error::Bus(_) => PdError::Failed,
+                            Error::Pd(e) => e,
+                        }),
+                ))
             }
         })
     }

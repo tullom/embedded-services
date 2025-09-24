@@ -11,10 +11,10 @@ use embedded_services::{
         event::PortEvent,
     },
 };
-use embedded_usb_pd::LocalPortId;
-use embedded_usb_pd::type_c::ConnectionState;
 use embedded_usb_pd::type_c::Current;
 use embedded_usb_pd::{Error, ado::Ado};
+use embedded_usb_pd::{LocalPortId, PdError};
+use embedded_usb_pd::{type_c::ConnectionState, ucsi::lpm};
 use log::{debug, info, trace};
 use std::cell::Cell;
 
@@ -289,6 +289,19 @@ impl embedded_services::type_c::controller::Controller for Controller<'_> {
     async fn set_tbt_config(&mut self, port: LocalPortId, config: TbtConfig) -> Result<(), Error<Self::BusError>> {
         debug!("Set Thunderbolt config for port {port:?}: {config:?}");
         Ok(())
+    }
+
+    async fn execute_ucsi_command(
+        &mut self,
+        command: lpm::LocalCommand,
+    ) -> Result<Option<lpm::ResponseData>, Error<Self::BusError>> {
+        debug!("Execute UCSI command for port {:?}: {command:?}", command.port());
+        match command.operation() {
+            lpm::CommandData::GetConnectorStatus => Ok(Some(lpm::ResponseData::GetConnectorStatus(
+                lpm::get_connector_status::ResponseData::default(),
+            ))),
+            _ => Err(PdError::UnrecognizedCommand.into()),
+        }
     }
 }
 
