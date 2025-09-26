@@ -180,7 +180,7 @@ impl Service<'_, '_> {
                 _ => mctp_rs::endpoint_id::EndpointId::Id(0x80),
             },
             packet_sequence_number: mctp_rs::mctp_sequence_number::MctpSequenceNumber::new(0),
-            message_tag: mctp_rs::mctp_message_tag::MctpMessageTag::try_from(3).unwrap(),
+            message_tag: mctp_rs::MctpMessageTag::try_from(3).unwrap(),
             medium_context: SmbusEspiReplyContext {
                 destination_slave_address: 1,
                 source_slave_address: 0,
@@ -358,14 +358,19 @@ async fn process_controller_event(
                 {
                     let mut assembly_access = espi_service.assembly_buf_owned_ref.borrow_mut();
                     let mut comms_access = espi_service.comms_buf_owned_ref.borrow_mut();
-                    let mut mctp_ctx = mctp_rs::MctpPacketContext::new(
-                        mctp_rs::medium::smbus_espi::SmbusEspiMedium,
+                    let mut mctp_ctx = mctp_rs::MctpPacketContext::<SmbusEspiMedium>::new(
+                        SmbusEspiMedium,
                         assembly_access.borrow_mut(),
                     );
 
-                    match mctp_ctx.receive_packet(with_pec) {
+                    match mctp_ctx.deserialize_packet(with_pec) {
                         Ok(Some(message)) => {
                             debug!("Complete message received");
+
+                            match message.parse_as::<mctp_rs::message_type::odp::Odp>() {
+                                Ok((one, two)) => return,
+                                Err(e) => return,
+                            }
 
                             // Complete message received
                             match message.header_and_body {

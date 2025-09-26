@@ -1342,13 +1342,12 @@ dependencies = [
 [[package]]
 name = "mctp-rs"
 version = "0.1.0"
-source = "git+https://github.com/tullom/mctp-rs?branch=make-interfaces-public#6e5d02a4c71e38fb9b44b081663d14b3061bacc0"
 dependencies = [
  "bit-register 0.1.0 (git+https://github.com/OpenDevicePartnership/odp-utilities)",
  "espi-device",
- "heapless 0.8.0",
  "num_enum",
  "smbus-pec",
+ "thiserror 2.0.16",
 ]
 
 [[package]]
