@@ -178,6 +178,7 @@ dependencies = [
  "embedded-hal-async",
  "embedded-services",
  "log",
+ "mctp-rs",
  "zerocopy",
 ]
 
@@ -947,6 +948,7 @@ dependencies = [
  "fixed",
  "heapless 0.8.0",
  "log",
+ "mctp-rs",
  "postcard",
  "rand_core",
  "serde",
@@ -1344,10 +1346,12 @@ name = "mctp-rs"
 version = "0.1.0"
 dependencies = [
  "bit-register 0.1.0 (git+https://github.com/OpenDevicePartnership/odp-utilities)",
+ "embedded-batteries",
  "espi-device",
  "num_enum",
  "smbus-pec",
  "thiserror 2.0.16",
+ "uuid",
 ]
 
 [[package]]

@@ -1,5 +1,9 @@
 //! EC Internal Messages
 
+use mctp_rs::OdpCommandCode;
+
+use crate::ec_type::protocols::{acpi, debug, mptf};
+
 #[allow(missing_docs)]
 #[derive(Clone, Copy, Debug)]
 pub enum CapabilitiesMessage {
@@ -67,16 +71,14 @@ pub enum BatteryMessage {
 }
 
 /// ACPI Message, compatible with comms system
-#[derive(Clone)]
-pub struct HostRequest<'a> {
-    /// Shared ref to a buffer
-    pub payload: crate::buffer::SharedRef<'a, u8>,
-    /// Size of payload
-    pub payload_len: usize,
-    /// Command, to be interpreted by service
-    pub command: u8,
+#[derive(Debug, Clone, Copy)]
+pub struct HostRequest<Command, Payload> {
+    /// Command
+    pub command: Command,
     /// Status code
     pub status: u8,
+    /// Data payload
+    pub payload: Payload,
 }
 
 /// Notification type to be sent to Host
@@ -108,11 +110,57 @@ pub enum ThermalMessage {
 }
 
 /// Message type that services can send to communicate with the Host.
-#[derive(Clone)]
-pub enum HostMsg<'a> {
+#[derive(Debug, Clone, Copy)]
+pub enum HostMsg<Command, Payload> {
     /// Notification without data. After receivng a notification,
     /// typically the host will request some data from the EC
     Notification(NotificationMsg),
     /// Response to Host request.
-    Response(HostRequest<'a>),
+    Response(HostRequest<Command, Payload>),
+}
+
+/// ODP specific command code that can come in from the host.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum OdpCommand {
+    /// Battery commands
+    Battery(acpi::BatteryCmd),
+    /// Thermal commands
+    Thermal(mptf::ThermalCmd),
+    /// Debug commands
+    Debug(debug::DebugCmd),
+}
+
+/// Standard Host Request
+pub type StdHostRequest = HostRequest<OdpCommand, mctp_rs::Odp>;
+/// Standard Host Message
+pub type StdHostMsg = HostMsg<OdpCommand, mctp_rs::Odp>;
+
+impl From<OdpCommandCode> for OdpCommand {
+    fn from(value: OdpCommandCode) -> Self {
+        match value {
+            OdpCommandCode::BatteryGetBix => OdpCommand::Battery(acpi::BatteryCmd::GetBix),
+            OdpCommandCode::BatteryGetBst => OdpCommand::Battery(acpi::BatteryCmd::GetBst),
+            OdpCommandCode::BatteryGetPsr => OdpCommand::Battery(acpi::BatteryCmd::GetPsr),
+            OdpCommandCode::BatteryGetPif => OdpCommand::Battery(acpi::BatteryCmd::GetPif),
+            OdpCommandCode::BatteryGetBps => OdpCommand::Battery(acpi::BatteryCmd::GetBps),
+            OdpCommandCode::BatterySetBtp => OdpCommand::Battery(acpi::BatteryCmd::SetBtp),
+            OdpCommandCode::BatterySetBpt => OdpCommand::Battery(acpi::BatteryCmd::SetBpt),
+            OdpCommandCode::BatteryGetBpc => OdpCommand::Battery(acpi::BatteryCmd::GetBpc),
+            OdpCommandCode::BatterySetBmc => OdpCommand::Battery(acpi::BatteryCmd::SetBmc),
+            OdpCommandCode::BatteryGetBmd => OdpCommand::Battery(acpi::BatteryCmd::GetBmd),
+            OdpCommandCode::BatteryGetBct => OdpCommand::Battery(acpi::BatteryCmd::GetBct),
+            OdpCommandCode::BatteryGetBtm => OdpCommand::Battery(acpi::BatteryCmd::GetBtm),
+            OdpCommandCode::BatterySetBms => OdpCommand::Battery(acpi::BatteryCmd::SetBms),
+            OdpCommandCode::BatterySetBma => OdpCommand::Battery(acpi::BatteryCmd::SetBma),
+            OdpCommandCode::BatteryGetSta => OdpCommand::Battery(acpi::BatteryCmd::GetSta),
+            OdpCommandCode::ThermalGetTmp => OdpCommand::Thermal(mptf::ThermalCmd::GetTmp),
+            OdpCommandCode::ThermalSetThrs => OdpCommand::Thermal(mptf::ThermalCmd::SetThrs),
+            OdpCommandCode::ThermalGetThrs => OdpCommand::Thermal(mptf::ThermalCmd::GetThrs),
+            OdpCommandCode::ThermalSetScp => OdpCommand::Thermal(mptf::ThermalCmd::SetScp),
+            OdpCommandCode::ThermalGetVar => OdpCommand::Thermal(mptf::ThermalCmd::GetVar),
+            OdpCommandCode::ThermalSetVar => OdpCommand::Thermal(mptf::ThermalCmd::SetVar),
+            OdpCommandCode::DebugGetMsgs => OdpCommand::Debug(debug::DebugCmd::GetMsgs),
+        }
+    }
 }

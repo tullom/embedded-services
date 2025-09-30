@@ -120,6 +120,7 @@ dependencies = [
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "embedded-services",
+ "mctp-rs",
  "zerocopy",
 ]
 
@@ -760,6 +761,7 @@ dependencies = [
  "embedded-usb-pd",
  "fixed",
  "heapless 0.8.0",
+ "mctp-rs",
  "postcard",
  "rand_core",
  "serde",
@@ -1094,10 +1096,12 @@ name = "mctp-rs"
 version = "0.1.0"
 dependencies = [
  "bit-register 0.1.0 (git+https://github.com/OpenDevicePartnership/odp-utilities)",
+ "embedded-batteries",
  "espi-device",
  "num_enum",
  "smbus-pec",
  "thiserror 2.0.16",
+ "uuid",
 ]
 
 [[package]]
@@ -1672,6 +1676,12 @@ name = "unty"
 version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
+
+[[package]]
+name = "uuid"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cf4199d1e5d15ddd86a694e4d0dffa9c323ce759fea589f00fef9d81cc1931d"
 
 [[package]]
 name = "vcell"

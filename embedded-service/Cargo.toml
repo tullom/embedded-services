@@ -38,6 +38,7 @@ log = { workspace = true, optional = true }
 postcard.workspace = true
 rand_core.workspace = true
 serde.workspace = true
+mctp-rs = { workspace = true, features = ["espi", "odp"] }
 
 [target.'cfg(target_os = "none")'.dependencies]
 cortex-m-rt.workspace = true

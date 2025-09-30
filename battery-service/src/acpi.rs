@@ -16,7 +16,7 @@ use embedded_services::{
 
 use crate::{
     context::PsuState,
-    device::{Device, DynamicBatteryMsgs, StaticBatteryMsgs},
+    device::{Device, DeviceId, DynamicBatteryMsgs, StaticBatteryMsgs},
 };
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -243,9 +243,19 @@ impl<'a> crate::context::Context<'a> {
         debug!("response sent to espi_service");
     }
 
-    pub(super) async fn bix_handler(&self, fg: &Device, _input_args: &[u8]) {
+    pub(super) async fn bix_handler(&self, request: mctp_rs::Odp) {
         trace!("Battery service: got BIX command!");
         // Enough space for all string fields to have 7 bytes + 1 null terminator byte
+        match request {
+            mctp_rs::Odp::BatteryGetBixRequest { battery_id } => {
+                if let Some(fg) = self.get_fuel_gauge(DeviceId(battery_id)) {
+                    let response = Std
+                } else {
+                    error!("Battery service: FG not found when trying to process ACPI cmd!");
+                }
+            }
+            _ => error!("Battery service: command and body mismatch!"),
+        }
         let mut bix_data = [0u8; 100];
         let static_cache_guard = fg.get_static_battery_cache_guarded().await;
         let dynamic_cache_guard = fg.get_dynamic_battery_cache_guarded().await;
