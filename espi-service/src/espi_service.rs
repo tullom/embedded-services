@@ -226,6 +226,10 @@ impl Service<'_> {
                 error!("serialize_packet_from_subsystem: {:?}", e);
                 Error::Serialize
             })?;
+
+            // Immediately service the packet with the ESPI HAL
+            let event = espi.wait_for_event().await;
+            process_controller_event(espi, self, event).await;
         }
         Ok(())
     }
@@ -237,15 +241,7 @@ impl Service<'_> {
         dest_slice[..packet.len()].copy_from_slice(&packet[..packet.len()]);
 
         // Write response over OOB
-        espi.oob_write_data(OOB_PORT_ID, packet.len() as u8)?;
-
-        // Immediately service the packet with the ESPI HAL
-        // REVISIT: Might need to do wait_for_event() here
-        // let event = espi.wait_for_event().await;
-        // process_controller_event(espi, self, event).await;
-        espi.complete_port(OOB_PORT_ID);
-
-        Ok(())
+        espi.oob_write_data(OOB_PORT_ID, packet.len() as u8)
     }
 
     fn send_mctp_error_response(&self, endpoint: EndpointID, espi: &mut espi::Espi<'static>) {
