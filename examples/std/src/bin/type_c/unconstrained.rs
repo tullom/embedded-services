@@ -1,15 +1,22 @@
-use embassy_executor::{Executor, Spawner};
+use crate::mock_controller::Wrapper;
+use embassy_executor::Executor;
 use embassy_sync::mutex::Mutex;
+use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::Timer;
-use embedded_services::GlobalRawMutex;
 use embedded_services::power::policy::PowerCapability;
 use embedded_services::power::{self};
-use embedded_services::type_c::{ControllerId, controller};
+use embedded_services::type_c::ControllerId;
+use embedded_services::type_c::controller::Context;
+use embedded_services::{GlobalRawMutex, IntrusiveList};
 use embedded_usb_pd::GlobalPortId;
 use log::*;
 use static_cell::StaticCell;
 use std_examples::type_c::mock_controller;
+use type_c_service::service::Service;
+use type_c_service::service::config::Config;
 use type_c_service::wrapper::backing::{ReferencedStorage, Storage};
+
+const NUM_PD_CONTROLLERS: usize = 3;
 
 const CONTROLLER0_ID: ControllerId = ControllerId(0);
 const PORT0_ID: GlobalPortId = GlobalPortId(0);
@@ -30,8 +37,6 @@ const DELAY_MS: u64 = 1000;
 
 #[embassy_executor::task(pool_size = 3)]
 async fn controller_task(wrapper: &'static mock_controller::Wrapper<'static>) {
-    wrapper.register().await.unwrap();
-
     loop {
         if let Err(e) = wrapper.process_next_event().await {
             error!("Error processing wrapper: {e:#?}");
@@ -40,13 +45,110 @@ async fn controller_task(wrapper: &'static mock_controller::Wrapper<'static>) {
 }
 
 #[embassy_executor::task]
-async fn task(spawner: Spawner) {
+async fn task(state: [&'static mock_controller::ControllerState; NUM_PD_CONTROLLERS]) {
     embedded_services::init().await;
 
-    controller::init();
+    const CAPABILITY: PowerCapability = PowerCapability {
+        voltage_mv: 20000,
+        current_ma: 5000,
+    };
+
+    // Wait for controller to be registered
+    Timer::after_secs(1).await;
+
+    info!("Connecting port 0, unconstrained");
+    state[0].connect_sink(CAPABILITY, true).await;
+    Timer::after_millis(DELAY_MS).await;
+
+    info!("Connecting port 1, constrained");
+    state[1].connect_sink(CAPABILITY, false).await;
+    Timer::after_millis(DELAY_MS).await;
+
+    info!("Disconnecting port 0");
+    state[0].disconnect().await;
+    Timer::after_millis(DELAY_MS).await;
+
+    info!("Disconnecting port 1");
+    state[1].disconnect().await;
+    Timer::after_millis(DELAY_MS).await;
+
+    info!("Connecting port 0, unconstrained");
+    state[0].connect_sink(CAPABILITY, true).await;
+    Timer::after_millis(DELAY_MS).await;
+
+    info!("Connecting port 1, unconstrained");
+    state[1].connect_sink(CAPABILITY, true).await;
+    Timer::after_millis(DELAY_MS).await;
+
+    info!("Connecting port 2, unconstrained");
+    state[2].connect_sink(CAPABILITY, true).await;
+    Timer::after_millis(DELAY_MS).await;
+
+    info!("Disconnecting port 0");
+    state[0].disconnect().await;
+    Timer::after_millis(DELAY_MS).await;
+
+    info!("Disconnecting port 1");
+    state[1].disconnect().await;
+    Timer::after_millis(DELAY_MS).await;
+
+    info!("Disconnecting port 2");
+    state[2].disconnect().await;
+    Timer::after_millis(DELAY_MS).await;
+}
+
+#[embassy_executor::task]
+async fn power_policy_service_task() {
+    power_policy_service::task::task(Default::default())
+        .await
+        .expect("Failed to start power policy service task");
+}
+
+#[embassy_executor::task]
+async fn service_task(
+    controller_context: &'static Context,
+    controllers: &'static IntrusiveList,
+    wrappers: [&'static Wrapper<'static>; NUM_PD_CONTROLLERS],
+) -> ! {
+    info!("Starting type-c task");
+
+    // The service is the only receiver and we only use a DynImmediatePublisher, which doesn't take a publisher slot
+    static POWER_POLICY_CHANNEL: StaticCell<PubSubChannel<GlobalRawMutex, power::policy::CommsMessage, 4, 1, 0>> =
+        StaticCell::new();
+
+    let power_policy_channel = POWER_POLICY_CHANNEL.init(PubSubChannel::new());
+    let power_policy_publisher = power_policy_channel.dyn_immediate_publisher();
+    // Guaranteed to not panic since we initialized the channel above
+    let power_policy_subscriber = power_policy_channel.dyn_subscriber().unwrap();
+
+    let service = Service::create(
+        Config::default(),
+        controller_context,
+        controllers,
+        power_policy_publisher,
+        power_policy_subscriber,
+    );
+
+    static SERVICE: StaticCell<Service> = StaticCell::new();
+    let service = SERVICE.init(service);
+
+    type_c_service::task::task(service, wrappers).await;
+    unreachable!()
+}
+
+fn main() {
+    env_logger::builder().filter_level(log::LevelFilter::Trace).init();
+
+    static EXECUTOR: StaticCell<Executor> = StaticCell::new();
+    let executor = EXECUTOR.init(Executor::new());
+
+    static CONTEXT: StaticCell<embedded_services::type_c::controller::Context> = StaticCell::new();
+    let context = CONTEXT.init(embedded_services::type_c::controller::Context::new());
+    static CONTROLLER_LIST: StaticCell<IntrusiveList> = StaticCell::new();
+    let controller_list = CONTROLLER_LIST.init(IntrusiveList::new());
 
     static STORAGE: StaticCell<Storage<1, GlobalRawMutex>> = StaticCell::new();
-    let storage = STORAGE.init(Storage::new(CONTROLLER0_ID, CFU0_ID, [(PORT0_ID, POWER0_ID)]));
+    let storage = STORAGE.init(Storage::new(context, CONTROLLER0_ID, CFU0_ID, [(PORT0_ID, POWER0_ID)]));
     static REFERENCED: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
     let referenced = REFERENCED.init(
         storage
@@ -70,7 +172,7 @@ async fn task(spawner: Spawner) {
     );
 
     static STORAGE1: StaticCell<Storage<1, GlobalRawMutex>> = StaticCell::new();
-    let storage1 = STORAGE1.init(Storage::new(CONTROLLER1_ID, CFU1_ID, [(PORT1_ID, POWER1_ID)]));
+    let storage1 = STORAGE1.init(Storage::new(context, CONTROLLER1_ID, CFU1_ID, [(PORT1_ID, POWER1_ID)]));
     static REFERENCED1: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
     let referenced1 = REFERENCED1.init(
         storage1
@@ -94,7 +196,7 @@ async fn task(spawner: Spawner) {
     );
 
     static STORAGE2: StaticCell<Storage<1, GlobalRawMutex>> = StaticCell::new();
-    let storage2 = STORAGE2.init(Storage::new(CONTROLLER2_ID, CFU2_ID, [(PORT2_ID, POWER2_ID)]));
+    let storage2 = STORAGE2.init(Storage::new(context, CONTROLLER2_ID, CFU2_ID, [(PORT2_ID, POWER2_ID)]));
     static REFERENCED2: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
     let referenced2 = REFERENCED2.init(
         storage2
@@ -117,81 +219,13 @@ async fn task(spawner: Spawner) {
         .expect("Failed to create wrapper"),
     );
 
-    info!("Starting controller tasks");
-    spawner.must_spawn(controller_task(wrapper0));
-    spawner.must_spawn(controller_task(wrapper1));
-    spawner.must_spawn(controller_task(wrapper2));
-
-    const CAPABILITY: PowerCapability = PowerCapability {
-        voltage_mv: 20000,
-        current_ma: 5000,
-    };
-
-    // Wait for controller to be registered
-    Timer::after_secs(1).await;
-
-    info!("Connecting port 0, unconstrained");
-    state0.connect_sink(CAPABILITY, true).await;
-    Timer::after_millis(DELAY_MS).await;
-
-    info!("Connecting port 1, constrained");
-    state1.connect_sink(CAPABILITY, false).await;
-    Timer::after_millis(DELAY_MS).await;
-
-    info!("Disconnecting port 0");
-    state0.disconnect().await;
-    Timer::after_millis(DELAY_MS).await;
-
-    info!("Disconnecting port 1");
-    state1.disconnect().await;
-    Timer::after_millis(DELAY_MS).await;
-
-    info!("Connecting port 0, unconstrained");
-    state0.connect_sink(CAPABILITY, true).await;
-    Timer::after_millis(DELAY_MS).await;
-
-    info!("Connecting port 1, unconstrained");
-    state1.connect_sink(CAPABILITY, true).await;
-    Timer::after_millis(DELAY_MS).await;
-
-    info!("Connecting port 2, unconstrained");
-    state2.connect_sink(CAPABILITY, true).await;
-    Timer::after_millis(DELAY_MS).await;
-
-    info!("Disconnecting port 0");
-    state0.disconnect().await;
-    Timer::after_millis(DELAY_MS).await;
-
-    info!("Disconnecting port 1");
-    state1.disconnect().await;
-    Timer::after_millis(DELAY_MS).await;
-
-    info!("Disconnecting port 2");
-    state2.disconnect().await;
-    Timer::after_millis(DELAY_MS).await;
-}
-
-#[embassy_executor::task]
-async fn type_c_service_task() -> ! {
-    type_c_service::task(Default::default()).await;
-    unreachable!()
-}
-
-#[embassy_executor::task]
-async fn power_policy_service_task() {
-    power_policy_service::task::task(Default::default())
-        .await
-        .expect("Failed to start power policy service task");
-}
-
-fn main() {
-    env_logger::builder().filter_level(log::LevelFilter::Trace).init();
-
-    static EXECUTOR: StaticCell<Executor> = StaticCell::new();
-    let executor = EXECUTOR.init(Executor::new());
     executor.run(|spawner| {
         spawner.must_spawn(power_policy_service_task());
-        spawner.must_spawn(type_c_service_task());
-        spawner.must_spawn(task(spawner));
+        spawner.must_spawn(service_task(context, controller_list, [wrapper0, wrapper1, wrapper2]));
+        spawner.must_spawn(task([state0, state1, state2]));
+        info!("Starting controller tasks");
+        spawner.must_spawn(controller_task(wrapper0));
+        spawner.must_spawn(controller_task(wrapper1));
+        spawner.must_spawn(controller_task(wrapper2));
     });
 }
