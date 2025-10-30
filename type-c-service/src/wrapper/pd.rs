@@ -4,7 +4,7 @@ use embassy_time::{Duration, Timer};
 use embedded_services::debug;
 use embedded_services::type_c::Cached;
 use embedded_services::type_c::controller::{InternalResponseData, Response};
-use embedded_usb_pd::constants::{T_SRC_TRANS_REQ_EPR_MS, T_SRC_TRANS_REQ_SPR_MS};
+use embedded_usb_pd::constants::{T_PS_TRANSITION_EPR_MS, T_PS_TRANSITION_SPR_MS};
 use embedded_usb_pd::ucsi::{self, lpm};
 
 use super::*;
@@ -39,7 +39,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
     /// Check the sink ready timeout
     ///
     /// After accepting a sink contract (new contract as consumer), the PD spec guarantees that the
-    /// source will be available to provide power after `tSrcTransReq`. This allows us to handle transitions
+    /// source will be available to provide power after `tPSTransition`. This allows us to handle transitions
     /// even for controllers that might not always broadcast sink ready events.
     pub(super) async fn check_sink_ready_timeout(
         &self,
@@ -57,11 +57,15 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
 
         if new_contract && !sink_ready {
             // Start the timeout
+            // Double the spec maximum transition time to provide a safety margin for hardware/controller delays our out-of-spec controllers.
             let timeout_ms = if status.epr {
-                T_SRC_TRANS_REQ_EPR_MS
+                T_PS_TRANSITION_EPR_MS
             } else {
-                T_SRC_TRANS_REQ_SPR_MS
-            };
+                T_PS_TRANSITION_SPR_MS
+            }
+            .maximum
+            .0 * 2;
+
             debug!("Port{}: Sink ready timeout started for {}ms", port.0, timeout_ms);
             *deadline = Some(Instant::now() + Duration::from_millis(timeout_ms as u64));
         } else if deadline.is_some()
