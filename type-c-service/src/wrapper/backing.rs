@@ -26,9 +26,10 @@
 //!
 //! const NUM_PORTS: usize = 2;
 //!
-//! fn init() {
+//! fn init(context: &'static embedded_services::type_c::controller::Context) {
 //!    static STORAGE: StaticCell<Storage<NUM_PORTS, NoopRawMutex>> = StaticCell::new();
 //!    let storage = STORAGE.init(Storage::new(
+//!        context,
 //!        ControllerId(0),
 //!        0x0,
 //!        [(GlobalPortId(0), power::policy::DeviceId(0)), (GlobalPortId(1), power::policy::DeviceId(1))],

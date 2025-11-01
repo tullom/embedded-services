@@ -39,6 +39,7 @@ embassy-executor = { workspace = true, features = [
 ] }
 embassy-futures.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
+static_cell.workspace = true
 
 [features]
 default = []
