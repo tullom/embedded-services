@@ -44,7 +44,7 @@ struct State {
 /// Type-C service
 pub struct Service<'a> {
     /// Type-C context
-    context: &'static type_c::controller::Context,
+    context: &'a type_c::controller::Context,
     /// Current state
     state: Mutex<GlobalRawMutex, State>,
     /// Config
