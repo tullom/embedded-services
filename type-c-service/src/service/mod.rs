@@ -45,6 +45,8 @@ struct State {
 pub struct Service<'a> {
     /// Type-C context
     context: &'a type_c::controller::Context,
+    /// Controller intrusive list
+    controllers: &'a intrusive_list::IntrusiveList,
     /// Current state
     state: Mutex<GlobalRawMutex, State>,
     /// Config
@@ -86,7 +88,8 @@ impl<'a> Service<'a> {
     /// Create a new service the given configuration
     pub fn create(
         config: config::Config,
-        context: &'static embedded_services::type_c::controller::Context,
+        context: &'a embedded_services::type_c::controller::Context,
+        controller_list: &'a intrusive_list::IntrusiveList,
         power_policy_publisher: DynImmediatePublisher<'a, power_policy::CommsMessage>,
         power_policy_subscriber: DynSubscriber<'a, power_policy::CommsMessage>,
     ) -> Self {
@@ -96,6 +99,7 @@ impl<'a> Service<'a> {
             config,
             power_policy_event_publisher: power_policy_publisher.into(),
             power_policy_event_subscriber: Mutex::new(power_policy_subscriber),
+            controllers: controller_list,
         }
     }
 
@@ -163,9 +167,7 @@ impl<'a> Service<'a> {
         command: &external::Command,
     ) -> external::Response<'static> {
         match command {
-            external::Command::Controller(command) => {
-                self.process_external_controller_command(controllers, command).await
-            }
+            external::Command::Controller(command) => self.process_external_controller_command(command).await,
             external::Command::Port(command) => self.process_external_port_command(command, controllers).await,
             external::Command::Ucsi(command) => {
                 external::Response::Ucsi(self.process_ucsi_command(controllers, command).await)

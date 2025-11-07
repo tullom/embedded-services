@@ -230,6 +230,7 @@ async fn service_task(config: Config, controller_context: &'static Context, cont
     let service = Service::create(
         config,
         controller_context,
+        controllers,
         power_policy_publisher,
         power_policy_subscriber,
     );

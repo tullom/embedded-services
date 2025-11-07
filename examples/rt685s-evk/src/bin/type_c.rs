@@ -84,6 +84,7 @@ async fn service_task(
     let service = Service::create(
         type_c_service::service::config::Config::default(),
         controller_context,
+        controllers,
         power_policy_publisher,
         power_policy_subscriber,
     );
