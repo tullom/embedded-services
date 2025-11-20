@@ -131,7 +131,6 @@ dependencies = [
 name = "battery-service"
 version = "0.1.0"
 dependencies = [
- "embassy-executor",
  "embassy-futures",
  "embassy-sync",
  "embassy-time",
@@ -1529,7 +1528,6 @@ dependencies = [
 name = "power-policy-service"
 version = "0.1.0"
 dependencies = [
- "embassy-executor",
  "embassy-futures",
  "embassy-sync",
  "embassy-time",
@@ -1905,7 +1903,6 @@ dependencies = [
 name = "thermal-service"
 version = "0.1.0"
 dependencies = [
- "embassy-executor",
  "embassy-futures",
  "embassy-sync",
  "embassy-time",
@@ -2088,7 +2085,6 @@ version = "0.1.0"
 dependencies = [
  "bitfield 0.17.0",
  "bitflags 2.9.4",
- "embassy-executor",
  "embassy-futures",
  "embassy-sync",
  "embassy-time",
