@@ -39,6 +39,7 @@ type-c-service = { path = "../../type-c-service", features = ["log"] }
 embedded-sensors-hal-async = "0.3.0"
 embedded-fans-async = "0.2.0"
 thermal-service = { path = "../../thermal-service", features = ["log"] }
+pico-de-gallo-hal = { path = "../../../pico-de-gallo/crates/pico-de-gallo-hal" }
 
 env_logger = "0.9.0"
 log = "0.4.14"

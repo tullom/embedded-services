@@ -136,7 +136,7 @@ pub async fn get_state() -> context::State {
 }
 
 /// Battery service task.
-#[embassy_executor::task]
+// #[embassy_executor::task]
 pub async fn task() {
     info!("Starting battery-service task");
 

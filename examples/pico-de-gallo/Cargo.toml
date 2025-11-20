@@ -1,0 +1,70 @@
+
+[workspace]
+
+[package]
+name = "pico-de-gallo"
+version = "0.1.0"
+edition = "2024"
+
+# [workspace.lints.rust]
+# warnings = "deny"
+
+# [lints]
+# workspace = true
+
+[dependencies]
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
+# embassy-sync = { version = "0.7.2", features = ["log", "std"] }
+embedded-services = { path = "../../embedded-service", features = ["log"] }
+embassy-time = { version = "0.5.0", features = [
+    "log",
+    "std",
+    "generic-queue-8",
+] }
+embassy-time-driver = { version = "0.2.1", optional = true }
+embassy-futures = "0.1.2"
+
+# defmt = "0.3"
+
+# embedded-usb-pd = { git = "https://github.com/OpenDevicePartnership/embedded-usb-pd" }
+# power-policy-service = { path = "../../power-policy-service", features = [
+#     "log",
+# ] }
+# cfu-service = { path = "../../cfu-service", features = ["log"] }
+# embedded-cfu-protocol = { git = "https://github.com/OpenDevicePartnership/embedded-cfu" }
+
+embedded-batteries-async = "0.2.0"
+battery-service = { path = "../../battery-service", features = ["log"] }
+# type-c-service = { path = "../../type-c-service", features = ["log"] }
+
+embedded-sensors-hal-async = "0.3.0"
+embedded-fans-async = "0.2.0"
+# thermal-service = { path = "../../thermal-service", features = ["log"] }
+pico-de-gallo-hal = { path = "../../../pico-de-gallo/crates/pico-de-gallo-hal" }
+
+env_logger = "0.11"
+log = "0.4.14"
+# heapless = "0.8.0"
+# static_cell = "2"
+embedded-hal-async = "1.0.0"
+# embedded-hal-mock = { version = "0.11.1", features = ["embedded-hal-async"] }
+
+critical-section = { version = "1.1", features = ["std"] }
+bq40z50-rx = { version = "0.7", features = ["r5", "embassy-timeout"] }
+# debug-service = { path = "../../debug-service" }
+# tmp108 = { version = "0.4.0", features = [
+#     "async",
+#     "embedded-sensors-hal-async",
+# ] }
+
+[lib]
+name = "std_examples"
+path = "src/lib.rs"
+
+[[bin]]
+name = "test"
+path = "src/bin/test.rs"
+
+# Needed otherwise cargo will pull from git
+[patch."https://github.com/OpenDevicePartnership/embedded-services"]
+embedded-services = { path = "../../embedded-service" }
