@@ -288,7 +288,6 @@ checksum = "2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9"
 name = "cfu-service"
 version = "0.1.0"
 dependencies = [
- "embassy-executor",
  "embassy-futures",
  "embassy-sync",
  "embassy-time",
@@ -437,7 +436,6 @@ dependencies = [
  "bbq2",
  "critical-section",
  "defmt 0.3.100",
- "embassy-executor",
  "embassy-sync",
  "embassy-time",
  "embedded-services",
