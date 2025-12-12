@@ -249,7 +249,9 @@ impl PowerPolicy {
 
         let best_consumer = self.find_best_consumer(state).await?;
         info!("Best consumer: {:#?}", best_consumer);
-        if best_consumer.is_none() {
+        if let Some(best_consumer) = best_consumer {
+            self.connect_new_consumer(state, best_consumer).await?;
+        } else {
             // Notify disconnect if recently detached consumer was previously attached.
             if let Some(consumer_state) = state.current_consumer_state {
                 self.comms_notify(CommsMessage {
@@ -259,12 +261,8 @@ impl PowerPolicy {
             }
             // No new consumer available
             state.current_consumer_state = None;
-            self.update_unconstrained_state(state).await?;
-            return Ok(());
         }
-        let best_consumer = best_consumer.unwrap();
 
-        self.connect_new_consumer(state, best_consumer).await?;
         self.update_unconstrained_state(state).await
     }
 }

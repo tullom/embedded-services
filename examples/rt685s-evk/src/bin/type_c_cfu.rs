@@ -156,9 +156,10 @@ async fn type_c_service_task() -> ! {
 }
 
 #[embassy_executor::task]
-async fn power_policy_service_task() -> ! {
-    power_policy_service::task::task(Default::default()).await;
-    unreachable!()
+async fn power_policy_service_task() {
+    power_policy_service::task::task(Default::default())
+        .await
+        .expect("Failed to start power policy service task");
 }
 
 #[embassy_executor::main]
