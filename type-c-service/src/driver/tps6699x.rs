@@ -275,22 +275,14 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
     ///
     /// Drop safety: All state changes happen after await point
     async fn clear_port_events(&mut self, port: LocalPortId) -> Result<PortEvent, Error<Self::BusError>> {
-        if port.0 >= self.port_events.len() as u8 {
-            return PdError::InvalidPort.into();
-        }
-
         Ok(core::mem::replace(
-            &mut self.port_events[port.0 as usize],
+            self.port_events.get_mut(port.0 as usize).ok_or(PdError::InvalidPort)?,
             PortEvent::none(),
         ))
     }
 
     /// Returns the current status of the port
     async fn get_port_status(&mut self, port: LocalPortId) -> Result<PortStatus, Error<Self::BusError>> {
-        if port.0 >= self.port_events.len() as u8 {
-            return PdError::InvalidPort.into();
-        }
-
         let status = self.tps6699x.get_port_status(port).await?;
         trace!("Port{} status: {:#?}", port.0, status);
 
@@ -782,7 +774,8 @@ pub fn tps66994<'a, M: RawMutex, BUS: I2c>(
         "Number of ports exceeds maximum supported"
     );
 
-    // Statically checked above
+    // Panic safety: statically checked above
+    #[allow(clippy::unwrap_used)]
     Tps6699x::try_new(controller, TPS66994_NUM_PORTS, fw_update_config).unwrap()
 }
 
@@ -795,7 +788,9 @@ pub fn tps66993<'a, M: RawMutex, BUS: I2c>(
         TPS66993_NUM_PORTS > 0 && TPS66993_NUM_PORTS <= MAX_SUPPORTED_PORTS,
         "Number of ports exceeds maximum supported"
     );
-    // Statically checked above
+
+    // Panic safety: statically checked above
+    #[allow(clippy::unwrap_used)]
     Tps6699x::try_new(controller, TPS66993_NUM_PORTS, fw_update_config).unwrap()
 }
 

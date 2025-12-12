@@ -132,7 +132,11 @@ async fn main(spawner: Spawner) {
     ));
 
     static REFERENCED: StaticCell<ReferencedStorage<TPS66994_NUM_PORTS, GlobalRawMutex>> = StaticCell::new();
-    let referenced = REFERENCED.init(storage.create_referenced());
+    let referenced = REFERENCED.init(
+        storage
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
 
     info!("Spawining PD controller task");
     static CONTROLLER_MUTEX: StaticCell<Tps6699xMutex<'_>> = StaticCell::new();

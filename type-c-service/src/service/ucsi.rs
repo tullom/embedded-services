@@ -123,26 +123,30 @@ impl<'a> Service<'a> {
         // Executing a command requires two passes through the state machine
         // Using a loop allows all logic to be centralized
         loop {
-            if next_input.is_none() {
+            let output = if let Some(next_input) = next_input.take() {
+                state.ppm_state_machine.consume(next_input)
+            } else {
                 error!("Unexpected end of state machine processing");
                 return external::UcsiResponse {
                     notify_opm: true,
                     cci: Cci::new_error(),
                     data: Err(PdError::InvalidMode),
                 };
-            }
+            };
 
-            let output = state.ppm_state_machine.consume(next_input.take().unwrap());
-            if let Err(e @ InvalidTransition { .. }) = &output {
-                error!("PPM state machine transition failed: {:#?}", e);
-                return external::UcsiResponse {
-                    notify_opm: true,
-                    cci: Cci::new_error(),
-                    data: Err(PdError::Failed),
-                };
-            }
+            let output = match &output {
+                Ok(output) => output,
+                Err(e @ InvalidTransition { .. }) => {
+                    error!("PPM state machine transition failed: {:#?}", e);
+                    return external::UcsiResponse {
+                        notify_opm: true,
+                        cci: Cci::new_error(),
+                        data: Err(PdError::Failed),
+                    };
+                }
+            };
 
-            match output.unwrap() {
+            match output {
                 Some(ppm_output) => match ppm_output {
                     PpmOutput::ExecuteCommand(command) => {
                         // Queue up the next input to complete the command execution flow

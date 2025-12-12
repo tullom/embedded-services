@@ -41,7 +41,12 @@ where
         let Output { port, kind } = output;
         let global_port_id = self.registration.pd_controller.lookup_global_port(port)?;
         let port_index = port.0 as usize;
-        let notification = &mut state.port_states_mut()[port_index].pending_events.notification;
+        let notification = &mut state
+            .port_states_mut()
+            .get_mut(port_index)
+            .ok_or(PdError::InvalidPort)?
+            .pending_events
+            .notification;
         match kind {
             OutputKind::Entered(_) => notification.set_custom_mode_entered(true),
             OutputKind::Exited(_) => notification.set_custom_mode_exited(true),

@@ -18,12 +18,11 @@ where
         state: &mut dyn DynPortState<'_>,
         local_port: LocalPortId,
     ) -> Result<Option<Ado>, PdError> {
-        if local_port.0 as usize >= state.num_ports() {
-            return Err(PdError::InvalidPort);
-        }
-
         loop {
-            match state.port_states_mut()[local_port.0 as usize]
+            match state
+                .port_states_mut()
+                .get_mut(local_port.0 as usize)
+                .ok_or(PdError::InvalidPort)?
                 .pd_alerts
                 .1
                 .try_next_message()
@@ -56,7 +55,11 @@ where
             return Err(PdError::InvalidPort);
         }
 
-        let deadline = &mut state.port_states_mut()[port.0 as usize].sink_ready_deadline;
+        let deadline = &mut state
+            .port_states_mut()
+            .get_mut(port.0 as usize)
+            .ok_or(PdError::InvalidPort)?
+            .sink_ready_deadline;
 
         if new_contract && !sink_ready {
             // Start the timeout
@@ -97,7 +100,11 @@ where
             if let Some(deadline) = deadline {
                 Timer::at(deadline).await;
                 debug!("Port{}: Sink ready timeout reached", i);
-                self.state.lock().await.port_states_mut()[i].sink_ready_deadline = None;
+                if let Some(state) = self.state.lock().await.port_states_mut().get_mut(i) {
+                    state.sink_ready_deadline = None;
+                } else {
+                    error!("Invalid state array index {}", i);
+                }
             } else {
                 pending::<()>().await;
             }
@@ -164,12 +171,12 @@ where
         cached: Cached,
     ) -> Result<controller::PortResponseData, PdError> {
         if cached.0 {
-            if local_port.0 as usize >= state.num_ports() {
-                return Err(PdError::InvalidPort);
-            }
-
             Ok(controller::PortResponseData::PortStatus(
-                state.port_states()[local_port.0 as usize].status,
+                state
+                    .port_states()
+                    .get(local_port.0 as usize)
+                    .ok_or(PdError::InvalidPort)?
+                    .status,
             ))
         } else {
             match controller.get_port_status(local_port).await {
@@ -194,13 +201,13 @@ where
             return controller::Response::Port(Err(PdError::Busy));
         }
 
-        let local_port = self.registration.pd_controller.lookup_local_port(command.port);
-        if local_port.is_err() {
+        let local_port = if let Ok(port) = self.registration.pd_controller.lookup_local_port(command.port) {
+            port
+        } else {
             debug!("Invalid port: {:?}", command.port);
             return controller::Response::Port(Err(PdError::InvalidPort));
-        }
+        };
 
-        let local_port = local_port.unwrap();
         controller::Response::Port(match command.data {
             controller::PortCommandData::PortStatus(cached) => {
                 self.process_get_port_status(controller, state, local_port, cached)
@@ -208,7 +215,13 @@ where
             }
             controller::PortCommandData::ClearEvents => {
                 let port_index = local_port.0 as usize;
-                let event = core::mem::take(&mut state.port_states_mut()[port_index].pending_events);
+                let state = if let Some(state) = state.port_states_mut().get_mut(port_index) {
+                    state
+                } else {
+                    return controller::Response::Port(Err(PdError::InvalidPort));
+                };
+
+                let event = core::mem::take(&mut state.pending_events);
                 Ok(controller::PortResponseData::ClearEvents(event))
             }
             controller::PortCommandData::RetimerFwUpdateGetState => {

@@ -126,7 +126,15 @@ where
         state: &mut dyn DynPortState<'_>,
         content: &FwUpdateContentCommand,
     ) -> InternalResponseData {
-        let data = &content.data[0..content.header.data_length as usize];
+        let data = if let Some(data) = content.data.get(0..content.header.data_length as usize) {
+            data
+        } else {
+            return InternalResponseData::ContentResponse(FwUpdateContentResponse::new(
+                content.header.sequence_num,
+                CfuUpdateContentResponseStatus::ErrorPrepare,
+            ));
+        };
+
         debug!("Got content {:#?}", content);
         if content.header.flags & FW_UPDATE_FLAG_FIRST_BLOCK != 0 {
             debug!("Got first block");

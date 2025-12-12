@@ -282,17 +282,16 @@ where
         status: PortStatus,
     ) -> Result<(), Error<<C::Inner as Controller>::BusError>> {
         let port_index = local_port.0 as usize;
-        if port_index >= state.num_ports() {
-            return Err(PdError::InvalidPort.into());
-        }
-
         let global_port_id = self
             .registration
             .pd_controller
             .lookup_global_port(local_port)
             .map_err(Error::Pd)?;
 
-        let port_state = &mut state.port_states_mut()[port_index];
+        let port_state = state
+            .port_states_mut()
+            .get_mut(port_index)
+            .ok_or(Error::Pd(PdError::InvalidPort))?;
         let mut events = port_state.pending_events;
         events.status = events.status.union(status_event);
         port_state.pending_events = events;
@@ -316,17 +315,16 @@ where
         alert: Ado,
     ) -> Result<(), Error<<C::Inner as Controller>::BusError>> {
         let port_index = local_port.0 as usize;
-        if port_index >= state.num_ports() {
-            return Err(PdError::InvalidPort.into());
-        }
-
         let global_port_id = self
             .registration
             .pd_controller
             .lookup_global_port(local_port)
             .map_err(Error::Pd)?;
 
-        let port_state = &mut state.port_states_mut()[port_index];
+        let port_state = state
+            .port_states_mut()
+            .get_mut(port_index)
+            .ok_or(Error::Pd(PdError::InvalidPort))?;
         // Buffer the alert
         port_state.pd_alerts.0.publish_immediate(alert);
 
@@ -400,13 +398,15 @@ where
                             // Acquire the locks first to centralize the awaits here
                             let mut controller = self.controller.lock().await;
                             let mut state = self.state.lock().await;
+                            let port_state = state
+                                .port_states_mut()
+                                .get_mut(port_index)
+                                .ok_or(Error::Pd(PdError::InvalidPort))?;
                             let hw_event = controller.clear_port_events(LocalPortId(port_index as u8)).await?;
 
                             // No more awaits, modify state here for drop safety
-                            let sw_event = core::mem::replace(
-                                &mut state.port_states_mut()[port_index].sw_status_event,
-                                PortStatusChanged::none(),
-                            );
+                            let sw_event =
+                                core::mem::replace(&mut port_state.sw_status_event, PortStatusChanged::none());
                             Ok(hw_event.union(sw_event.into()))
                         })
                         .await?
@@ -447,7 +447,13 @@ where
                 Either5::Fifth(port) => {
                     // Sink ready timeout event
                     debug!("Port{0}: Sink ready timeout", port.0);
-                    self.state.lock().await.port_states_mut()[port.0 as usize].sink_ready_deadline = None;
+                    self.state
+                        .lock()
+                        .await
+                        .port_states_mut()
+                        .get_mut(port.0 as usize)
+                        .ok_or(Error::Pd(PdError::InvalidPort))?
+                        .sink_ready_deadline = None;
                     let mut status_event = PortStatusChanged::none();
                     status_event.set_sink_ready(true);
                     return Ok(Event::PortStatusChanged(EventPortStatusChanged { port, status_event }));
