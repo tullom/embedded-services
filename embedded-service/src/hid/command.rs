@@ -2,7 +2,7 @@
 use core::borrow::Borrow;
 
 use super::{Error, ReportId};
-use crate::buffer::SharedRef;
+use crate::{buffer::SharedRef, hid::InvalidSizeError};
 
 /// HID report types
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -350,7 +350,10 @@ impl<'a> Command<'a> {
 
         if report_id.0 >= EXTENDED_REPORT_ID {
             if buf.len() < EXTENDED_REPORT_CMD_LEN {
-                return Err(Error::InvalidSize(EXTENDED_REPORT_CMD_LEN, buf.len()));
+                return Err(Error::InvalidSize(InvalidSizeError {
+                    expected: EXTENDED_REPORT_CMD_LEN,
+                    actual: buf.len(),
+                }));
             }
 
             val |= EXTENDED_REPORT_ID as u16;
@@ -363,7 +366,10 @@ impl<'a> Command<'a> {
             Ok((EXTENDED_REPORT_CMD_LEN, &mut buf[EXTENDED_REPORT_CMD_LEN..]))
         } else {
             if buf.len() < STANDARD_REPORT_CMD_LEN {
-                return Err(Error::InvalidSize(STANDARD_REPORT_CMD_LEN, buf.len()));
+                return Err(Error::InvalidSize(InvalidSizeError {
+                    expected: STANDARD_REPORT_CMD_LEN,
+                    actual: buf.len(),
+                }));
             }
 
             val |= report_id.0 as u16;
@@ -377,7 +383,10 @@ impl<'a> Command<'a> {
     /// Returns the number of bytes written and the remaining buffer
     fn encode_basic_op(buf: &mut [u8], opcode: Opcode) -> Result<(usize, &mut [u8]), Error> {
         if buf.len() < BASIC_CMD_LEN {
-            return Err(Error::InvalidSize(BASIC_CMD_LEN, buf.len()));
+            return Err(Error::InvalidSize(InvalidSizeError {
+                expected: BASIC_CMD_LEN,
+                actual: buf.len(),
+            }));
         }
 
         buf[0..BASIC_CMD_LEN].copy_from_slice(&<Opcode as Into<u16>>::into(opcode).to_le_bytes());
@@ -389,7 +398,10 @@ impl<'a> Command<'a> {
     fn encode_register(buf: &mut [u8], reg: Option<u16>) -> Result<(usize, &mut [u8]), Error> {
         if let Some(reg) = reg {
             if buf.len() < REGISTER_LEN {
-                return Err(Error::InvalidSize(REGISTER_LEN, buf.len()));
+                return Err(Error::InvalidSize(InvalidSizeError {
+                    expected: REGISTER_LEN,
+                    actual: buf.len(),
+                }));
             }
             buf[0..REGISTER_LEN].copy_from_slice(&reg.to_le_bytes());
             Ok((REGISTER_LEN, &mut buf[REGISTER_LEN..]))
@@ -402,7 +414,10 @@ impl<'a> Command<'a> {
     /// Returns the number of bytes written and the remaining buffer
     fn encode_value<T: Into<u16>>(buf: &mut [u8], value: T) -> Result<(usize, &mut [u8]), Error> {
         if buf.len() < LENGTH_VALUE_LEN {
-            return Err(Error::InvalidSize(LENGTH_VALUE_LEN, buf.len()));
+            return Err(Error::InvalidSize(InvalidSizeError {
+                expected: LENGTH_VALUE_LEN,
+                actual: buf.len(),
+            }));
         }
         // Length value includes the size of the length as well
         buf[0..VALUE_LEN].copy_from_slice(&4u16.to_le_bytes());
@@ -416,7 +431,10 @@ impl<'a> Command<'a> {
         // +2 to encode the length of the data
         let total_len = data.len() + 2;
         if buf.len() < total_len {
-            return Err(Error::InvalidSize(total_len, buf.len()));
+            return Err(Error::InvalidSize(InvalidSizeError {
+                expected: total_len,
+                actual: buf.len(),
+            }));
         }
 
         buf[0..VALUE_LEN].copy_from_slice(&(total_len as u16).to_le_bytes());
