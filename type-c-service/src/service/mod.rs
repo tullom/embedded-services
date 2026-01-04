@@ -4,13 +4,11 @@ use embassy_sync::{
     pubsub::{DynImmediatePublisher, DynSubscriber},
 };
 use embedded_services::{
-    GlobalRawMutex,
-    comms::{self, EndpointID, Internal},
-    debug, error, info, intrusive_list,
+    GlobalRawMutex, debug, error, info, intrusive_list,
     ipc::deferred,
     trace,
     type_c::{
-        self,
+        self, comms,
         controller::PortStatus,
         event::{PortNotificationSingle, PortStatusChanged},
         external,
@@ -49,8 +47,6 @@ struct State {
 
 /// Type-C service
 pub struct Service<'a> {
-    /// Comms endpoint
-    tp: comms::Endpoint,
     /// Type-C context token
     context: type_c::controller::ContextToken,
     /// Current state
@@ -76,6 +72,10 @@ pub struct Service<'a> {
 pub enum PowerPolicyEvent {
     /// Unconstrained state changed
     Unconstrained(power_policy::UnconstrainedState),
+    /// Consumer disconnected
+    ConsumerDisconnected,
+    /// Consumer connected
+    ConsumerConnected,
 }
 
 /// Type-C service events
@@ -98,7 +98,6 @@ impl<'a> Service<'a> {
         power_policy_subscriber: DynSubscriber<'a, power_policy::CommsMessage>,
     ) -> Option<Self> {
         Some(Self {
-            tp: comms::Endpoint::uninit(EndpointID::Internal(Internal::Usbc)),
             context: type_c::controller::ContextToken::create()?,
             state: Mutex::new(State::default()),
             config,
@@ -109,22 +108,17 @@ impl<'a> Service<'a> {
 
     /// Get the cached port status
     pub async fn get_cached_port_status(&self, port_id: GlobalPortId) -> Result<PortStatus, Error> {
-        if port_id.0 as usize >= MAX_SUPPORTED_PORTS {
-            return Err(Error::InvalidPort);
-        }
-
         let state = self.state.lock().await;
-        Ok(state.port_status[port_id.0 as usize])
+        Ok(*state.port_status.get(port_id.0 as usize).ok_or(Error::InvalidPort)?)
     }
 
     /// Set the cached port status
     async fn set_cached_port_status(&self, port_id: GlobalPortId, status: PortStatus) -> Result<(), Error> {
-        if port_id.0 as usize >= MAX_SUPPORTED_PORTS {
-            return Err(Error::InvalidPort);
-        }
-
         let mut state = self.state.lock().await;
-        state.port_status[port_id.0 as usize] = status;
+        *state
+            .port_status
+            .get_mut(port_id.0 as usize)
+            .ok_or(Error::InvalidPort)? = status;
         Ok(())
     }
 
@@ -144,23 +138,22 @@ impl<'a> Service<'a> {
         let connection_changed = status.is_connected() != old_status.is_connected();
         if connection_changed && (status.is_debug_accessory() || old_status.is_debug_accessory()) {
             // Notify that a debug connection has connected/disconnected
-            let msg = type_c::comms::DebugAccessoryMessage {
-                port: port_id,
-                connected: status.is_connected(),
-            };
-
             if status.is_connected() {
                 debug!("Port{}: Debug accessory connected", port_id.0);
             } else {
                 debug!("Port{}: Debug accessory disconnected", port_id.0);
             }
 
-            if self.tp.send(EndpointID::Internal(Internal::Usbc), &msg).await.is_err() {
-                error!("Failed to send debug accessory message");
-            }
+            self.context
+                .broadcast_message(comms::CommsMessage::DebugAccessory(comms::DebugAccessoryMessage {
+                    port: port_id,
+                    connected: status.is_connected(),
+                }))
+                .await;
         }
 
         self.set_cached_port_status(port_id, status).await?;
+        self.handle_ucsi_port_event(port_id, event, &status).await;
 
         Ok(())
     }
@@ -246,16 +239,8 @@ impl<'a> Service<'a> {
         self.process_event(event).await
     }
 
-    /// Register the Type-C service with the comms endpoint
-    pub async fn register_comms(&'static self) -> Result<(), intrusive_list::Error> {
-        comms::register_endpoint(self, &self.tp).await?;
-        power_policy::policy::register_message_receiver(&self.power_policy_event_publisher).await
-    }
-}
-
-impl comms::MailboxDelegate for Service<'_> {
-    fn receive(&self, _message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
-        // Currently only need to send messages
-        Ok(())
+    /// Register the Type-C service with the power policy service
+    pub fn register_comms(&'static self) -> Result<(), intrusive_list::Error> {
+        power_policy::policy::register_message_receiver(&self.power_policy_event_publisher)
     }
 }

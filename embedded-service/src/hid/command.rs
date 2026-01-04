@@ -2,7 +2,7 @@
 use core::borrow::Borrow;
 
 use super::{Error, ReportId};
-use crate::buffer::SharedRef;
+use crate::{buffer::SharedRef, hid::InvalidSizeError};
 
 /// HID report types
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,21 +310,25 @@ impl<'a> Command<'a> {
             Opcode::Reset => Command::Reset,
             Opcode::GetReport => {
                 if report_type? == ReportType::Input || report_type? == ReportType::Feature {
-                    Command::GetReport(report_type?, report_id.unwrap())
+                    Command::GetReport(report_type?, report_id.ok_or(Error::RequiresReportId)?)
                 } else {
                     return Err(Error::InvalidReportType);
                 }
             }
             Opcode::SetReport => {
                 if report_type? == ReportType::Output || report_type? == ReportType::Feature {
-                    Command::SetReport(report_type?, report_id.unwrap(), data.unwrap())
+                    Command::SetReport(
+                        report_type?,
+                        report_id.ok_or(Error::RequiresReportId)?,
+                        data.ok_or(Error::RequiresData)?,
+                    )
                 } else {
                     return Err(Error::InvalidReportType);
                 }
             }
-            Opcode::GetIdle => Command::GetIdle(report_id.unwrap()),
+            Opcode::GetIdle => Command::GetIdle(report_id.ok_or(Error::RequiresReportId)?),
             Opcode::SetIdle => Command::SetIdle(
-                report_id.unwrap(),
+                report_id.ok_or(Error::RequiresReportId)?,
                 cmd.try_into().map_err(|_| Error::InvalidReportFreq)?,
             ),
             Opcode::GetProtocol => Command::GetProtocol,
@@ -338,6 +342,8 @@ impl<'a> Command<'a> {
 
     /// Encodes common values for a command with a report ID into a slice
     /// Returns the number of bytes written and the remaining buffer
+    // panic safety: we check the length at the start of the function
+    #[allow(clippy::indexing_slicing)]
     fn encode_common(
         buf: &mut [u8],
         opcode: Opcode,
@@ -350,7 +356,10 @@ impl<'a> Command<'a> {
 
         if report_id.0 >= EXTENDED_REPORT_ID {
             if buf.len() < EXTENDED_REPORT_CMD_LEN {
-                return Err(Error::InvalidSize(EXTENDED_REPORT_CMD_LEN, buf.len()));
+                return Err(Error::InvalidSize(InvalidSizeError {
+                    expected: EXTENDED_REPORT_CMD_LEN,
+                    actual: buf.len(),
+                }));
             }
 
             val |= EXTENDED_REPORT_ID as u16;
@@ -363,7 +372,10 @@ impl<'a> Command<'a> {
             Ok((EXTENDED_REPORT_CMD_LEN, &mut buf[EXTENDED_REPORT_CMD_LEN..]))
         } else {
             if buf.len() < STANDARD_REPORT_CMD_LEN {
-                return Err(Error::InvalidSize(STANDARD_REPORT_CMD_LEN, buf.len()));
+                return Err(Error::InvalidSize(InvalidSizeError {
+                    expected: STANDARD_REPORT_CMD_LEN,
+                    actual: buf.len(),
+                }));
             }
 
             val |= report_id.0 as u16;
@@ -375,9 +387,14 @@ impl<'a> Command<'a> {
 
     /// Encodes an operation with no report ID or additional data into a slice
     /// Returns the number of bytes written and the remaining buffer
+    // panic safety: we check the length at the start of the function
+    #[allow(clippy::indexing_slicing)]
     fn encode_basic_op(buf: &mut [u8], opcode: Opcode) -> Result<(usize, &mut [u8]), Error> {
         if buf.len() < BASIC_CMD_LEN {
-            return Err(Error::InvalidSize(BASIC_CMD_LEN, buf.len()));
+            return Err(Error::InvalidSize(InvalidSizeError {
+                expected: BASIC_CMD_LEN,
+                actual: buf.len(),
+            }));
         }
 
         buf[0..BASIC_CMD_LEN].copy_from_slice(&<Opcode as Into<u16>>::into(opcode).to_le_bytes());
@@ -386,10 +403,15 @@ impl<'a> Command<'a> {
 
     /// Encodes a register address into a slice
     /// Returns the number of bytes written and the remaining buffer
+    // panic safety: we check the length at the start of the function
+    #[allow(clippy::indexing_slicing)]
     fn encode_register(buf: &mut [u8], reg: Option<u16>) -> Result<(usize, &mut [u8]), Error> {
         if let Some(reg) = reg {
             if buf.len() < REGISTER_LEN {
-                return Err(Error::InvalidSize(REGISTER_LEN, buf.len()));
+                return Err(Error::InvalidSize(InvalidSizeError {
+                    expected: REGISTER_LEN,
+                    actual: buf.len(),
+                }));
             }
             buf[0..REGISTER_LEN].copy_from_slice(&reg.to_le_bytes());
             Ok((REGISTER_LEN, &mut buf[REGISTER_LEN..]))
@@ -400,9 +422,14 @@ impl<'a> Command<'a> {
 
     /// Encodes a u16 value into a slice, prefixed by a length
     /// Returns the number of bytes written and the remaining buffer
+    // panic safety: we check the length at the start of the function
+    #[allow(clippy::indexing_slicing)]
     fn encode_value<T: Into<u16>>(buf: &mut [u8], value: T) -> Result<(usize, &mut [u8]), Error> {
         if buf.len() < LENGTH_VALUE_LEN {
-            return Err(Error::InvalidSize(LENGTH_VALUE_LEN, buf.len()));
+            return Err(Error::InvalidSize(InvalidSizeError {
+                expected: LENGTH_VALUE_LEN,
+                actual: buf.len(),
+            }));
         }
         // Length value includes the size of the length as well
         buf[0..VALUE_LEN].copy_from_slice(&4u16.to_le_bytes());
@@ -412,11 +439,16 @@ impl<'a> Command<'a> {
 
     /// Encodes data into a slice, prefixed by a length
     /// Returns the number of bytes written and the remaining buffer
+    // panic safety: we check the length at the start of the function
+    #[allow(clippy::indexing_slicing)]
     fn encode_data<'b>(buf: &'b mut [u8], data: &[u8]) -> Result<(usize, &'b mut [u8]), Error> {
         // +2 to encode the length of the data
         let total_len = data.len() + 2;
         if buf.len() < total_len {
-            return Err(Error::InvalidSize(total_len, buf.len()));
+            return Err(Error::InvalidSize(InvalidSizeError {
+                expected: total_len,
+                actual: buf.len(),
+            }));
         }
 
         buf[0..VALUE_LEN].copy_from_slice(&(total_len as u16).to_le_bytes());
@@ -453,7 +485,7 @@ impl<'a> Command<'a> {
                 len += register_len;
             }
             Command::SetReport(report_type, report_id, data) => {
-                let borrow = data.borrow();
+                let borrow = data.borrow().map_err(|_| Error::InvalidData)?;
                 let data: &[u8] = borrow.borrow();
 
                 let (command_len, buf) = Self::encode_common(buf, Opcode::SetReport, Some(*report_type), *report_id)?;
@@ -510,7 +542,13 @@ impl<'a> Command<'a> {
             Command::SetPower(state) => {
                 let opcode: u16 = Opcode::SetPower.into();
                 let state: u16 = (*state).into();
-                buf[0..2].copy_from_slice(&(opcode | state).to_le_bytes());
+                let buf_len = buf.len();
+                buf.get_mut(0..2)
+                    .ok_or(Error::InvalidSize(InvalidSizeError {
+                        expected: 2,
+                        actual: buf_len,
+                    }))?
+                    .copy_from_slice(&(opcode | state).to_le_bytes());
                 len += 2;
             }
             Command::Vendor => {

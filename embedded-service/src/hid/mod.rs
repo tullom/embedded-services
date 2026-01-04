@@ -2,7 +2,6 @@
 //! See spec at <http://msdn.microsoft.com/en-us/library/windows/hardware/hh852380.aspx>
 use core::convert::Infallible;
 
-use embassy_sync::once_lock::OnceLock;
 use embassy_sync::signal::Signal;
 
 use crate::buffer::SharedRef;
@@ -15,6 +14,16 @@ pub use command::*;
 /// HID descriptor length
 pub const DESCRIPTOR_LEN: usize = 30;
 
+/// Data for [`Error::InvalidSize`]
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct InvalidSizeError {
+    /// Expected size
+    pub expected: usize,
+    /// Actual size
+    pub actual: usize,
+}
+
 /// HID errors
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -22,7 +31,7 @@ pub enum Error {
     /// Invalid data
     InvalidData,
     /// Invalid size: expected and actual sizes
-    InvalidSize(usize, usize),
+    InvalidSize(InvalidSizeError),
     /// Invalid register address
     InvalidRegisterAddress,
     /// Invalid device
@@ -67,9 +76,14 @@ pub struct Descriptor {
 
 impl Descriptor {
     /// Serializes a descriptor into the slice
+    // panic safety: we check the length at the start of the function
+    #[allow(clippy::indexing_slicing)]
     pub fn encode_into_slice(&self, buf: &mut [u8]) -> Result<usize, Error> {
         if buf.len() < DESCRIPTOR_LEN {
-            return Err(Error::InvalidSize(DESCRIPTOR_LEN, buf.len()));
+            return Err(Error::InvalidSize(InvalidSizeError {
+                expected: DESCRIPTOR_LEN,
+                actual: buf.len(),
+            }));
         }
 
         buf[0..2].copy_from_slice(&self.w_hid_desc_length.to_le_bytes());
@@ -92,9 +106,14 @@ impl Descriptor {
     }
 
     /// Deserializes a descriptor from the slice
+    // panic safety: we check the length at the start of the function
+    #[allow(clippy::indexing_slicing)]
     pub fn decode_from_slice(buf: &[u8]) -> Result<Self, Error> {
         if buf.len() < DESCRIPTOR_LEN {
-            return Err(Error::InvalidSize(DESCRIPTOR_LEN, buf.len()));
+            return Err(Error::InvalidSize(InvalidSizeError {
+                expected: DESCRIPTOR_LEN,
+                actual: buf.len(),
+            }));
         }
 
         // Reserved bytes must be zero
@@ -290,30 +309,25 @@ struct Context {
 }
 
 impl Context {
-    fn new() -> Self {
+    const fn new() -> Self {
         Context {
             devices: IntrusiveList::new(),
         }
     }
 }
 
-static CONTEXT: OnceLock<Context> = OnceLock::new();
-
-/// Init HID service
-pub fn init() {
-    CONTEXT.get_or_init(Context::new);
-}
+static CONTEXT: Context = Context::new();
 
 /// Register a device with the HID service
 pub async fn register_device(device: &'static impl DeviceContainer) -> Result<(), intrusive_list::Error> {
     let device = device.get_hid_device();
-    CONTEXT.get().await.devices.push(device)?;
+    CONTEXT.devices.push(device)?;
     comms::register_endpoint(device, &device.tp).await
 }
 
 /// Find a device by its ID
-pub async fn get_device(id: DeviceId) -> Option<&'static Device> {
-    for device in &CONTEXT.get().await.devices {
+pub fn get_device(id: DeviceId) -> Option<&'static Device> {
+    for device in &CONTEXT.devices {
         if let Some(data) = device.data::<Device>() {
             if data.id == id {
                 return Some(data);

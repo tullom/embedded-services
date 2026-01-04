@@ -1,8 +1,8 @@
 use embassy_executor::{Executor, Spawner};
+use embassy_sync::mutex::Mutex;
 use embassy_sync::once_lock::OnceLock;
 use embassy_time::Timer;
 use embedded_services::power::{self};
-use embedded_services::transformers::object::Object;
 use embedded_services::type_c::{ControllerId, controller};
 use embedded_services::{GlobalRawMutex, comms};
 use embedded_usb_pd::GlobalPortId;
@@ -14,9 +14,9 @@ use std_examples::type_c::mock_controller;
 use type_c_service::wrapper::backing::{ReferencedStorage, Storage};
 use type_c_service::wrapper::message::*;
 
-const CONTROLLER0: ControllerId = ControllerId(0);
-const PORT0: GlobalPortId = GlobalPortId(0);
-const POWER0: power::policy::DeviceId = power::policy::DeviceId(0);
+const CONTROLLER0_ID: ControllerId = ControllerId(0);
+const PORT0_ID: GlobalPortId = GlobalPortId(0);
+const POWER0_ID: power::policy::DeviceId = power::policy::DeviceId(0);
 const DELAY_MS: u64 = 1000;
 
 mod debug {
@@ -57,23 +57,34 @@ mod debug {
 async fn controller_task(state: &'static mock_controller::ControllerState) {
     static STORAGE: StaticCell<Storage<1, GlobalRawMutex>> = StaticCell::new();
     let storage = STORAGE.init(Storage::new(
-        CONTROLLER0,
+        CONTROLLER0_ID,
         0, // CFU component ID (unused)
-        [(PORT0, POWER0)],
+        [(PORT0_ID, POWER0_ID)],
     ));
     static REFERENCED: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
-    let referenced = REFERENCED.init(storage.create_referenced());
+    let referenced = REFERENCED.init(
+        storage
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
+
+    static CONTROLLER: StaticCell<Mutex<GlobalRawMutex, mock_controller::Controller>> = StaticCell::new();
+    let controller = CONTROLLER.init(Mutex::new(mock_controller::Controller::new(state)));
 
     static WRAPPER: StaticCell<mock_controller::Wrapper> = StaticCell::new();
-    let controller = mock_controller::Controller::new(state);
     let wrapper = WRAPPER.init(
-        mock_controller::Wrapper::try_new(controller, referenced, crate::mock_controller::Validator)
-            .expect("Failed to create wrapper"),
+        mock_controller::Wrapper::try_new(
+            controller,
+            Default::default(),
+            referenced,
+            crate::mock_controller::Validator,
+        )
+        .expect("Failed to create wrapper"),
     );
 
     wrapper.register().await.unwrap();
 
-    wrapper.get_inner().await.custom_function();
+    controller.lock().await.custom_function();
 
     loop {
         let event = wrapper.wait_next().await;
@@ -137,14 +148,27 @@ async fn task(spawner: Spawner) {
     Timer::after_millis(DELAY_MS).await;
 }
 
+#[embassy_executor::task]
+async fn type_c_service_task() -> ! {
+    type_c_service::task(Default::default()).await;
+    unreachable!()
+}
+
+#[embassy_executor::task]
+async fn power_policy_service_task() {
+    power_policy_service::task::task(Default::default())
+        .await
+        .expect("Failed to start power policy service task");
+}
+
 fn main() {
     env_logger::builder().filter_level(log::LevelFilter::Trace).init();
 
     static EXECUTOR: StaticCell<Executor> = StaticCell::new();
     let executor = EXECUTOR.init(Executor::new());
     executor.run(|spawner| {
-        spawner.must_spawn(power_policy_service::task(Default::default()));
-        spawner.must_spawn(type_c_service::task(Default::default()));
+        spawner.must_spawn(power_policy_service_task());
+        spawner.must_spawn(type_c_service_task());
         spawner.must_spawn(task(spawner));
     });
 }

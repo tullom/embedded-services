@@ -1,5 +1,4 @@
 /// This example is supposed to init a debug service and a mock eSPI service to demonstrate sending defmt messages from the debug service to the eSPI service
-use debug_service::debug_service;
 use embassy_executor::{Executor, Spawner};
 use embedded_services::comms::{Endpoint, EndpointID, External};
 use embedded_services::info;
@@ -62,7 +61,7 @@ mod espi_service {
                     }
                     HostMsg::Response(acpi) => {
                         // Stage the response bytes into the mock OOB buffer for the host
-                        let mut access = self.resp_owned.borrow_mut();
+                        let mut access = self.resp_owned.borrow_mut().unwrap();
                         let buf: &mut [u8] = core::borrow::BorrowMut::borrow_mut(&mut access);
                         if let StdHostPayload::DebugGetMsgsResponse { debug_buf } = acpi.payload {
                             let copy_len = core::cmp::min(debug_buf.len(), buf.len());
@@ -122,7 +121,7 @@ mod espi_service {
             let request = b"GetDebugBuffer";
             let req_len = request.len();
             {
-                let mut access = req_owned.borrow_mut();
+                let mut access = req_owned.borrow_mut().unwrap();
                 let buf: &mut [u8] = BorrowMut::borrow_mut(&mut access);
                 buf[..req_len].copy_from_slice(request);
             }
@@ -144,7 +143,7 @@ mod espi_service {
             // Wait for the response payload staged by the Debug service, then "forward" it to host
             let len = wait_response_len().await;
             let buf = response_buf();
-            let access = buf.borrow();
+            let access = buf.borrow().unwrap();
             let slice: &[u8] = core::borrow::Borrow::borrow(&access);
             let bytes = &slice[..len.min(slice.len())];
             let preview = bytes
@@ -179,12 +178,24 @@ async fn init_task(spawner: Spawner) {
     spawner.must_spawn(espi_service::request_task());
 
     info!("spawn debug service");
-    spawner.must_spawn(debug_service(Endpoint::uninit(EndpointID::External(External::Host))));
+    spawner.must_spawn(debug_service());
 
     info!("spawn defmt_to_host_task");
-    spawner.must_spawn(debug_service::defmt_to_host_task());
+    spawner.must_spawn(defmt_to_host_task());
 
     spawner.must_spawn(defmt_frames_task());
+}
+
+#[embassy_executor::task]
+async fn debug_service() -> ! {
+    debug_service::task::debug_service(Endpoint::uninit(EndpointID::External(External::Host))).await;
+    unreachable!()
+}
+
+#[embassy_executor::task]
+async fn defmt_to_host_task() -> ! {
+    let Err(e) = debug_service::task::defmt_to_host_task().await;
+    panic!("defmt_to_host_task error: {e:?}");
 }
 
 fn main() {

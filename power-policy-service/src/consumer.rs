@@ -19,21 +19,42 @@ pub struct AvailableConsumer {
 
 /// Compare two consumer capabilities to determine which one is better
 ///
-/// This is not part of the `Ord` implementation for `ConsumerPowerCapability`, because it's specific to this implementation
-fn cmp_consumer_capability(a: &ConsumerPowerCapability, b: &ConsumerPowerCapability) -> Ordering {
-    (a.capability, a.flags.unconstrained_power()).cmp(&(b.capability, b.flags.unconstrained_power()))
+/// This is not part of the `Ord` implementation for `ConsumerPowerCapability`, because it's specific to this implementation.
+/// *_is_current indicate if the device with that capability is the currently connected consumer. This is used to make the
+/// implementation stick so as to avoid switching between otherwise equivalent consumers.
+fn cmp_consumer_capability(
+    a: &ConsumerPowerCapability,
+    a_is_current: bool,
+    b: &ConsumerPowerCapability,
+    b_is_current: bool,
+) -> Ordering {
+    (a.capability, a_is_current).cmp(&(b.capability, b_is_current))
 }
 
 impl PowerPolicy {
     /// Iterate over all devices to determine what is best power port provides the highest power
-    async fn find_best_consumer(&self) -> Result<Option<AvailableConsumer>, Error> {
+    async fn find_best_consumer(&self, state: &InternalState) -> Result<Option<AvailableConsumer>, Error> {
         let mut best_consumer = None;
+        let current_consumer_id = state.current_consumer_state.map(|f| f.device_id);
 
-        for node in self.context.devices().await {
+        for node in self.context.devices() {
             let device = node.data::<Device>().ok_or(Error::InvalidDevice)?;
 
+            let consumer_capability = device.consumer_capability().await;
+            // Don't consider consumers below minimum threshold
+            if consumer_capability
+                .zip(self.config.min_consumer_threshold_mw)
+                .is_some_and(|(cap, min)| cap.capability.max_power_mw() < min)
+            {
+                info!(
+                    "Device{}: Not considering consumer, power capability is too low",
+                    device.id().0,
+                );
+                continue;
+            }
+
             // Update the best available consumer
-            best_consumer = match (best_consumer, device.consumer_capability().await) {
+            best_consumer = match (best_consumer, consumer_capability) {
                 // Nothing available
                 (None, None) => None,
                 // No existing consumer
@@ -45,8 +66,12 @@ impl PowerPolicy {
                 (Some(_), None) => best_consumer,
                 // Existing consumer, new available consumer
                 (Some(best), Some(available)) => {
-                    if cmp_consumer_capability(&available, &best.consumer_power_capability)
-                        == core::cmp::Ordering::Greater
+                    if cmp_consumer_capability(
+                        &available,
+                        Some(device.id()) == current_consumer_id,
+                        &best.consumer_power_capability,
+                        Some(best.device_id) == current_consumer_id,
+                    ) == core::cmp::Ordering::Greater
                     {
                         Some(AvailableConsumer {
                             device_id: device.id(),
@@ -66,15 +91,10 @@ impl PowerPolicy {
     async fn update_unconstrained_state(&self, state: &mut InternalState) -> Result<(), Error> {
         // Count how many available unconstrained devices we have
         let mut unconstrained_new = UnconstrainedState::default();
-        for node in self.context.devices().await {
+        for node in self.context.devices() {
             let device = node.data::<Device>().ok_or(Error::InvalidDevice)?;
             if let Some(capability) = device.consumer_capability().await {
-                // The device is considered unconstrained if it meets the auto unconstrained power threshold
-                let auto_unconstrained = self
-                    .config
-                    .auto_unconstrained_threshold_mw
-                    .is_some_and(|threshold| capability.capability.max_power_mw() >= threshold);
-                if capability.flags.unconstrained_power() || auto_unconstrained {
+                if capability.flags.unconstrained_power() {
                     unconstrained_new.available += 1;
                 }
             }
@@ -107,12 +127,12 @@ impl PowerPolicy {
         embassy_time::Timer::after_millis(800).await;
 
         // If no chargers are registered, they won't receive the new power capability.
-        for node in self.context.chargers().await {
+        for node in self.context.chargers() {
             let device = node.data::<ChargerDevice>().ok_or(Error::InvalidDevice)?;
             // Chargers should be powered at this point, but in case they are not...
             if let embedded_services::power::policy::charger::ChargerResponseData::UnpoweredAck = device
                 .execute_command(PolicyEvent::PolicyConfiguration(
-                    connected_consumer.consumer_power_capability.capability,
+                    connected_consumer.consumer_power_capability,
                 ))
                 .await?
             {
@@ -123,7 +143,7 @@ impl PowerPolicy {
                 init_chargers().await?;
                 device
                     .execute_command(PolicyEvent::PolicyConfiguration(
-                        connected_consumer.consumer_power_capability.capability,
+                        connected_consumer.consumer_power_capability,
                     ))
                     .await?;
             }
@@ -131,7 +151,7 @@ impl PowerPolicy {
         self.comms_notify(CommsMessage {
             data: CommsData::ConsumerConnected(
                 connected_consumer.device_id,
-                connected_consumer.consumer_power_capability.capability,
+                connected_consumer.consumer_power_capability,
             ),
         })
         .await;
@@ -141,12 +161,15 @@ impl PowerPolicy {
 
     /// Disconnect all chargers
     pub(super) async fn disconnect_chargers(&self) -> Result<(), Error> {
-        for node in self.context.chargers().await {
+        for node in self.context.chargers() {
             let device = node.data::<ChargerDevice>().ok_or(Error::InvalidDevice)?;
             if let embedded_services::power::policy::charger::ChargerResponseData::UnpoweredAck = device
-                .execute_command(PolicyEvent::PolicyConfiguration(PowerCapability {
-                    voltage_mv: 0,
-                    current_ma: 0,
+                .execute_command(PolicyEvent::PolicyConfiguration(ConsumerPowerCapability {
+                    capability: PowerCapability {
+                        voltage_mv: 0,
+                        current_ma: 0,
+                    },
+                    flags: flags::Consumer::none(),
                 }))
                 .await?
             {
@@ -236,9 +259,11 @@ impl PowerPolicy {
             state.current_consumer_state
         );
 
-        let best_consumer = self.find_best_consumer().await?;
+        let best_consumer = self.find_best_consumer(state).await?;
         info!("Best consumer: {:#?}", best_consumer);
-        if best_consumer.is_none() {
+        if let Some(best_consumer) = best_consumer {
+            self.connect_new_consumer(state, best_consumer).await?;
+        } else {
             // Notify disconnect if recently detached consumer was previously attached.
             if let Some(consumer_state) = state.current_consumer_state {
                 self.comms_notify(CommsMessage {
@@ -248,12 +273,8 @@ impl PowerPolicy {
             }
             // No new consumer available
             state.current_consumer_state = None;
-            self.update_unconstrained_state(state).await?;
-            return Ok(());
         }
-        let best_consumer = best_consumer.unwrap();
 
-        self.connect_new_consumer(state, best_consumer).await?;
         self.update_unconstrained_state(state).await
     }
 }
@@ -277,35 +298,8 @@ mod tests {
         let p0 = P0.into();
         let p1 = P1.into();
 
-        assert_eq!(cmp_consumer_capability(&p0, &p1), Ordering::Less);
-        assert_eq!(cmp_consumer_capability(&p1, &p1), Ordering::Equal);
-        assert_eq!(cmp_consumer_capability(&p1, &p0), Ordering::Greater);
-    }
-
-    /// Tests the [`cmp_consumer_capability`] with unconstrained power flag set.
-    #[test]
-    fn test_cmp_consumer_capability_unconstrained() {
-        let p0 = P0.into();
-        let p1 = P1.into();
-        let p0_unconstrained = ConsumerPowerCapability {
-            capability: P0,
-            flags: flags::Consumer::none().with_unconstrained_power(),
-        };
-        let p1_unconstrained = ConsumerPowerCapability {
-            capability: P1,
-            flags: flags::Consumer::none().with_unconstrained_power(),
-        };
-
-        // At the same power, the unconstrained capability should take precedence
-        assert_eq!(cmp_consumer_capability(&p0_unconstrained, &p0), Ordering::Greater);
-
-        // Unconstrained should not take precedence over higher power
-        assert_eq!(cmp_consumer_capability(&p1, &p0_unconstrained), Ordering::Greater);
-
-        // Both unconstrained, should rely on power
-        assert_eq!(
-            cmp_consumer_capability(&p0_unconstrained, &p1_unconstrained),
-            Ordering::Less
-        );
+        assert_eq!(cmp_consumer_capability(&p0, false, &p1, false), Ordering::Less);
+        assert_eq!(cmp_consumer_capability(&p1, false, &p1, false), Ordering::Equal);
+        assert_eq!(cmp_consumer_capability(&p1, false, &p0, false), Ordering::Greater);
     }
 }

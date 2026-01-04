@@ -16,6 +16,12 @@ impl<'a> Service<'a> {
                     power_policy::CommsData::Unconstrained(state) => {
                         return Event::PowerPolicy(PowerPolicyEvent::Unconstrained(state));
                     }
+                    power_policy::CommsData::ConsumerDisconnected(_) => {
+                        return Event::PowerPolicy(PowerPolicyEvent::ConsumerDisconnected);
+                    }
+                    power_policy::CommsData::ConsumerConnected(_, _) => {
+                        return Event::PowerPolicy(PowerPolicyEvent::ConsumerConnected);
+                    }
                     _ => {
                         // No other events currently implemented
                     }
@@ -26,7 +32,7 @@ impl<'a> Service<'a> {
 
     /// Set the unconstrained state for all ports
     pub(super) async fn set_unconstrained_all(&self, unconstrained: bool) -> Result<(), Error> {
-        for port_index in 0..self.context.get_num_ports().await {
+        for port_index in 0..self.context.get_num_ports() {
             self.context
                 .set_unconstrained_power(GlobalPortId(port_index as u8), unconstrained)
                 .await?;
@@ -51,7 +57,7 @@ impl<'a> Service<'a> {
                 self.set_unconstrained_all(true).await?;
             } else {
                 // Only one unconstrained device is present, see if that's one of our ports
-                let num_ports = self.context.get_num_ports().await;
+                let num_ports = self.context.get_num_ports();
                 let unconstrained_port = state
                     .port_status
                     .iter()
@@ -91,6 +97,20 @@ impl<'a> Service<'a> {
     pub(super) async fn process_power_policy_event(&self, message: &PowerPolicyEvent) -> Result<(), Error> {
         match message {
             PowerPolicyEvent::Unconstrained(state) => self.process_unconstrained_state_change(state).await,
+            PowerPolicyEvent::ConsumerDisconnected => {
+                let mut state = self.state.lock().await;
+                state.ucsi.psu_connected = false;
+                // Notify OPM because this can affect battery charging capability status
+                self.pend_ucsi_connected_ports(&mut state).await;
+                Ok(())
+            }
+            PowerPolicyEvent::ConsumerConnected => {
+                let mut state = self.state.lock().await;
+                state.ucsi.psu_connected = true;
+                // Notify OPM because this can affect battery charging capability status
+                self.pend_ucsi_connected_ports(&mut state).await;
+                Ok(())
+            }
         }
     }
 }

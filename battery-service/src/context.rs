@@ -108,11 +108,26 @@ pub struct BatteryEvent {
     pub device_id: DeviceId,
 }
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct PsuState {
     pub psu_connected: bool,
     pub power_capability: Option<PowerCapability>,
+}
+
+impl PsuState {
+    pub const fn new() -> Self {
+        Self {
+            psu_connected: false,
+            power_capability: None,
+        }
+    }
+}
+
+impl Default for PsuState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Battery service context, hardware agnostic state.
@@ -132,12 +147,18 @@ pub struct Config {
     no_op_max_retries: usize,
 }
 
-impl Default for Config {
-    fn default() -> Self {
+impl Config {
+    pub const fn new() -> Self {
         Self {
             state_machine_timeout_ms: Duration::from_secs(120),
             no_op_max_retries: 5,
         }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -149,11 +170,11 @@ impl Context {
         Self::new_inner(Default::default())
     }
 
-    pub fn new_with_config(config: Config) -> Self {
+    pub const fn new_with_config(config: Config) -> Self {
         Self::new_inner(config)
     }
 
-    fn new_inner(config: Config) -> Self {
+    const fn new_inner(config: Config) -> Self {
         Self {
             fuel_gauges: IntrusiveList::new(),
             state: Mutex::new(State::NotPresent),
@@ -162,7 +183,7 @@ impl Context {
             no_op_retry_count: AtomicUsize::new(0),
             config,
             acpi_request: Signal::new(),
-            power_info: Mutex::new(PsuState::default()),
+            power_info: Mutex::new(PsuState::new()),
         }
     }
 
@@ -203,14 +224,21 @@ impl Context {
             },
             Err(_) => {
                 error!("Battery state machine timeout!");
-                // Should be infallible
-                self.do_state_machine(BatteryEvent {
-                    event: BatteryEventInner::Timeout,
-                    device_id: event.device_id,
-                })
-                .await
-                .expect("Error type is Infallible");
-                self.battery_response.send(Err(ContextError::Timeout)).await;
+
+                match self
+                    .do_state_machine(BatteryEvent {
+                        event: BatteryEventInner::Timeout,
+                        device_id: event.device_id,
+                    })
+                    .await
+                {
+                    Ok(_) => {
+                        self.battery_response.send(Err(ContextError::Timeout)).await;
+                    }
+                    Err(e) => {
+                        self.battery_response.send(Err(ContextError::StateError(e))).await;
+                    }
+                }
             }
         };
     }
@@ -260,7 +288,7 @@ impl Context {
                     Ok(State::Present(PresentSubstate::NotOperational))
                 }
             }
-            BatteryEventInner::Oem(_, _items) => todo!(),
+            BatteryEventInner::Oem(_, _items) => Err(StateMachineError::InvalidActionInState),
         }
     }
 
@@ -413,7 +441,7 @@ impl Context {
     }
 
     /// Register fuel gauge device with the context instance.
-    pub async fn register_fuel_gauge(&self, device: &'static Device) -> Result<(), intrusive_list::Error> {
+    pub fn register_fuel_gauge(&self, device: &'static Device) -> Result<(), intrusive_list::Error> {
         if self.get_fuel_gauge(device.id()).is_some() {
             return Err(embedded_services::Error::NodeAlreadyInList);
         }
@@ -508,11 +536,10 @@ impl Context {
             embedded_services::power::policy::CommsData::ConsumerConnected(_device_id, power_capability) => {
                 *psu_state = PsuState {
                     psu_connected: true,
-                    power_capability: Some(*power_capability),
+                    power_capability: Some(power_capability.capability),
                 }
             }
-            embedded_services::power::policy::CommsData::Unconstrained(_) => { /* Don't care about Unconstrained state */
-            }
+            _rest => { /* Don't care about anything else */ }
         }
 
         trace!("Battery: PSU state: {:?}", psu_state);

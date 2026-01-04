@@ -2,7 +2,7 @@ use core::mem::offset_of;
 use core::slice;
 
 use core::borrow::BorrowMut;
-use embassy_futures::select::select;
+use embassy_imxrt::espi;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::once_lock::OnceLock;
@@ -29,8 +29,9 @@ type HostMsgInternal = (EndpointID, StdHostMsg);
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-enum Error {
+pub enum Error {
     Serialize,
+    Buffer(embedded_services::buffer::Error),
 }
 
 pub struct Service<'a> {
@@ -146,11 +147,11 @@ impl Service<'_> {
         Ok(())
     }
 
-    async fn wait_for_subsystem_msg(&self) -> HostMsgInternal {
+    pub(crate) async fn wait_for_subsystem_msg(&self) -> HostMsgInternal {
         self.host_tx_queue.receive().await
     }
 
-    async fn process_subsystem_msg(&self, espi: &mut espi::Espi<'static>, host_msg: HostMsgInternal) {
+    pub(crate) async fn process_subsystem_msg(&self, espi: &mut espi::Espi<'static>, host_msg: HostMsgInternal) {
         let (endpoint, host_msg) = host_msg;
         match host_msg {
             HostMsg::Notification(notification_msg) => self.process_notification_to_host(espi, &notification_msg).await,
@@ -169,7 +170,7 @@ impl Service<'_> {
         response: &StdHostRequest,
         endpoint: EndpointID,
     ) -> Result<(), Error> {
-        let mut assembly_buf_access = self.assembly_buf_owned_ref.borrow_mut();
+        let mut assembly_buf_access = self.assembly_buf_owned_ref.borrow_mut().map_err(Error::Buffer)?;
         let pkt_ctx_buf = assembly_buf_access.borrow_mut();
         let mut mctp_ctx = mctp_rs::MctpPacketContext::new(mctp_rs::smbus_espi::SmbusEspiMedium, pkt_ctx_buf);
 
@@ -229,7 +230,7 @@ impl Service<'_> {
 
             // Immediately service the packet with the ESPI HAL
             let event = espi.wait_for_event().await;
-            process_controller_event(espi, self, event).await;
+            process_controller_event(espi, self, event).await?;
         }
         Ok(())
     }
@@ -272,6 +273,10 @@ impl Service<'_> {
             }
         }
     }
+
+    pub(crate) fn endpoint(&self) -> &comms::Endpoint {
+        &self.endpoint
+    }
 }
 
 impl comms::MailboxDelegate for Service<'_> {
@@ -304,56 +309,13 @@ impl comms::MailboxDelegate for Service<'_> {
     }
 }
 
-static ESPI_SERVICE: OnceLock<Service> = OnceLock::new();
+pub(crate) static ESPI_SERVICE: OnceLock<Service> = OnceLock::new();
 
-use embassy_imxrt::espi;
-
-#[embassy_executor::task]
-pub async fn espi_service(mut espi: espi::Espi<'static>, memory_map_buffer: &'static mut [u8]) {
-    info!("Reserved eSPI memory map buffer size: {}", memory_map_buffer.len());
-    info!("eSPI MemoryMap size: {}", size_of::<ec_type::structure::ECMemory>());
-
-    if size_of::<ec_type::structure::ECMemory>() > memory_map_buffer.len() {
-        panic!("eSPI MemoryMap is too big for reserved memory buffer!!!");
-    }
-
-    memory_map_buffer.fill(0);
-
-    let memory_map: &mut ec_type::structure::ECMemory =
-        unsafe { &mut *(memory_map_buffer.as_mut_ptr() as *mut ec_type::structure::ECMemory) };
-
-    espi.wait_for_plat_reset().await;
-
-    info!("Initializing memory map");
-    memory_map.ver.major = ec_type::structure::EC_MEMMAP_VERSION.major;
-    memory_map.ver.minor = ec_type::structure::EC_MEMMAP_VERSION.minor;
-    memory_map.ver.spin = ec_type::structure::EC_MEMMAP_VERSION.spin;
-    memory_map.ver.res0 = ec_type::structure::EC_MEMMAP_VERSION.res0;
-
-    let espi_service = ESPI_SERVICE.get_or_init(|| Service::new(memory_map));
-    comms::register_endpoint(espi_service, &espi_service.endpoint)
-        .await
-        .unwrap();
-
-    loop {
-        let event = select(espi.wait_for_event(), espi_service.wait_for_subsystem_msg()).await;
-
-        match event {
-            embassy_futures::select::Either::First(controller_event) => {
-                process_controller_event(&mut espi, espi_service, controller_event).await
-            }
-            embassy_futures::select::Either::Second(host_msg) => {
-                espi_service.process_subsystem_msg(&mut espi, host_msg).await
-            }
-        }
-    }
-}
-
-async fn process_controller_event(
+pub(crate) async fn process_controller_event(
     espi: &mut espi::Espi<'static>,
     espi_service: &Service<'_>,
     event: Result<embassy_imxrt::espi::Event, embassy_imxrt::espi::Error>,
-) {
+) -> Result<(), Error> {
     match event {
         Ok(espi::Event::PeripheralEvent(port_event)) => {
             info!(
@@ -400,7 +362,10 @@ async fn process_controller_event(
                 let endpoint: EndpointID;
 
                 {
-                    let mut assembly_access = espi_service.assembly_buf_owned_ref.borrow_mut();
+                    let mut assembly_access = espi_service
+                        .assembly_buf_owned_ref
+                        .borrow_mut()
+                        .map_err(Error::Buffer)?;
                     // let mut comms_access = espi_service.comms_buf_owned_ref.borrow_mut();
                     let mut mctp_ctx = mctp_rs::MctpPacketContext::<SmbusEspiMedium>::new(
                         SmbusEspiMedium,
@@ -448,7 +413,7 @@ async fn process_controller_event(
                                         EndpointID::Internal(embedded_services::comms::Internal::Debug),
                                         espi,
                                     );
-                                    return;
+                                    return Err(Error::Serialize);
                                 }
                             }
                         }
@@ -464,7 +429,7 @@ async fn process_controller_event(
                                 EndpointID::Internal(embedded_services::comms::Internal::Debug),
                                 espi,
                             );
-                            return;
+                            return Err(Error::Serialize);
                         }
                         Err(_e) => {
                             // Handle protocol or medium error
@@ -478,7 +443,7 @@ async fn process_controller_event(
                                 EndpointID::Internal(embedded_services::comms::Internal::Debug),
                                 espi,
                             );
-                            return;
+                            return Err(Error::Serialize);
                         }
                     }
                 }
@@ -500,4 +465,5 @@ async fn process_controller_event(
             error!("eSPI Failed with error: {:?}", e);
         }
     }
+    Ok(())
 }

@@ -7,12 +7,18 @@ use embedded_services::{
     power::policy::{
         ConsumerPowerCapability, ProviderPowerCapability,
         device::{CommandData, InternalResponseData},
+        flags::PsuType,
     },
 };
 
+use crate::wrapper::config::UnconstrainedSink;
+
 use super::*;
 
-impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, M, C, V> {
+impl<'device, M: RawMutex, C: Lockable, V: FwOfferValidator> ControllerWrapper<'device, M, C, V>
+where
+    <C as Lockable>::Inner: Controller,
+{
     /// Return the power device for the given port
     pub fn get_power_device(&self, port: LocalPortId) -> Option<&policy::device::Device> {
         self.registration.power_devices.get(port.0 as usize)
@@ -23,7 +29,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
         &self,
         power: &policy::device::Device,
         status: &PortStatus,
-    ) -> Result<(), Error<<C as Controller>::BusError>> {
+    ) -> Result<(), Error<<C::Inner as Controller>::BusError>> {
         info!("Process new consumer contract");
 
         let current_state = power.state().await.kind();
@@ -42,7 +48,13 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
 
         let available_sink_contract = status.available_sink_contract.map(|c| {
             let mut c: ConsumerPowerCapability = c.into();
-            c.flags.set_unconstrained_power(status.unconstrained_power);
+            let unconstrained = match self.config.unconstrained_sink {
+                UnconstrainedSink::Auto => status.unconstrained_power,
+                UnconstrainedSink::PowerThresholdMilliwatts(threshold) => c.capability.max_power_mw() >= threshold,
+                UnconstrainedSink::Never => false,
+            };
+            c.flags.set_unconstrained_power(unconstrained);
+            c.flags.set_psu_type(PsuType::TypeC);
             c
         });
 
@@ -74,7 +86,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
         &self,
         power: &policy::device::Device,
         status: &PortStatus,
-    ) -> Result<(), Error<<C as Controller>::BusError>> {
+    ) -> Result<(), Error<<C::Inner as Controller>::BusError>> {
         info!("Process New provider contract");
 
         let current_state = power.state().await.kind();
@@ -99,16 +111,21 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
             }
         }
 
+        let contract = status.available_source_contract.map(|c| {
+            let mut c: ProviderPowerCapability = c.into();
+            c.flags.set_psu_type(PsuType::TypeC);
+            c
+        });
         if let Ok(state) = power.try_device_action::<action::Idle>().await {
-            if let Some(contract) = status.available_source_contract {
-                if let Err(e) = state.request_provider_power_capability(contract.into()).await {
+            if let Some(contract) = contract {
+                if let Err(e) = state.request_provider_power_capability(contract).await {
                     error!("Error setting power contract: {:?}", e);
                     return PdError::Failed.into();
                 }
             }
         } else if let Ok(state) = power.try_device_action::<action::ConnectedProvider>().await {
-            if let Some(contract) = status.available_source_contract {
-                if let Err(e) = state.request_provider_power_capability(contract.into()).await {
+            if let Some(contract) = contract {
+                if let Err(e) = state.request_provider_power_capability(contract).await {
                     error!("Error setting power contract: {:?}", e);
                     return PdError::Failed.into();
                 }
@@ -131,9 +148,9 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
     async fn process_disconnect(
         &self,
         port: LocalPortId,
-        controller: &mut C,
+        controller: &mut C::Inner,
         power: &policy::device::Device,
-    ) -> Result<(), Error<<C as Controller>::BusError>> {
+    ) -> Result<(), Error<<C::Inner as Controller>::BusError>> {
         let state = power.state().await.kind();
         if state == StateKind::ConnectedConsumer {
             info!("Port{}: Disconnect from ConnectedConsumer", port.0);
@@ -147,12 +164,12 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
     }
 
     /// Handle a connect as provider command
-    async fn process_connect_as_provider(
+    fn process_connect_as_provider(
         &self,
         port: LocalPortId,
         capability: ProviderPowerCapability,
-        _controller: &mut C,
-    ) -> Result<(), Error<C::BusError>> {
+        _controller: &mut C::Inner,
+    ) -> Result<(), Error<<C::Inner as Controller>::BusError>> {
         info!("Port{}: Connect as provider: {:#?}", port.0, capability);
         // TODO: double check explicit contract handling
         Ok(())
@@ -185,7 +202,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
     /// Returns no error because this is a top-level function
     pub(super) async fn process_power_command(
         &self,
-        controller: &mut C,
+        controller: &mut C::Inner,
         state: &mut dyn DynPortState<'_>,
         port: LocalPortId,
         command: &CommandData,
@@ -216,11 +233,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
                 }
             }
             policy::device::CommandData::ConnectAsProvider(capability) => {
-                if self
-                    .process_connect_as_provider(port, *capability, controller)
-                    .await
-                    .is_err()
-                {
+                if self.process_connect_as_provider(port, *capability, controller).is_err() {
                     error!("Error processing connect provider");
                     return Err(policy::Error::Failed);
                 }

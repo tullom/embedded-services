@@ -4,19 +4,19 @@ version = "0.1.0"
 edition = "2024"
 description = "Keyboard service implementation"
 repository = "https://github.com/OpenDevicePartnership/embedded-services"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 
 [dependencies]
 defmt = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
-embassy-executor.workspace = true
 embassy-futures.workspace = true
 embassy-sync.workspace = true
 embassy-time.workspace = true
 embedded-services.workspace = true
 embedded-hal.workspace = true
 static_cell.workspace = true
+bitflags.workspace = true
 hid-service = { path = "../hid-service" }
 keyberon = { git = "https://github.com/TeXitoi/keyberon" }
 
@@ -27,7 +27,6 @@ defmt = [
     "embedded-services/defmt",
     "embassy-time/defmt",
     "embassy-sync/defmt",
-    "embassy-executor/defmt",
     "hid-service/defmt",
 ]
 log = [
@@ -35,6 +34,5 @@ log = [
     "embedded-services/log",
     "embassy-time/log",
     "embassy-sync/log",
-    "embassy-executor/log",
     "hid-service/log",
 ]

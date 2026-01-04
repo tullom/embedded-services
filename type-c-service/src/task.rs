@@ -17,22 +17,21 @@ pub async fn task_closure<'a, Fut: Future<Output = ()>, F: Fn(&'a Service) -> Fu
 
     let power_policy_channel = POWER_POLICY_CHANNEL.init(PubSubChannel::new());
     let power_policy_publisher = power_policy_channel.dyn_immediate_publisher();
-    // Guaranteed to not panic since we initialized the channel above
-    let power_policy_subscriber = power_policy_channel.dyn_subscriber().unwrap();
+    let Ok(power_policy_subscriber) = power_policy_channel.dyn_subscriber() else {
+        error!("Failed to create power policy subscriber");
+        return;
+    };
 
     let service = Service::create(config, power_policy_publisher, power_policy_subscriber);
-    let service = match service {
-        Some(service) => service,
-        None => {
-            error!("Type-C service already initialized");
-            return;
-        }
+    let Some(service) = service else {
+        error!("Type-C service already initialized");
+        return;
     };
 
     static SERVICE: StaticCell<Service> = StaticCell::new();
     let service = SERVICE.init(service);
 
-    if service.register_comms().await.is_err() {
+    if service.register_comms().is_err() {
         error!("Failed to register type-c service endpoint");
         return;
     }
@@ -42,7 +41,6 @@ pub async fn task_closure<'a, Fut: Future<Output = ()>, F: Fn(&'a Service) -> Fu
     }
 }
 
-#[embassy_executor::task]
 pub async fn task(config: Config) {
     task_closure(config, |service: &Service| async {
         if let Err(e) = service.process_next_event().await {

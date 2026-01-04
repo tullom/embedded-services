@@ -4,23 +4,25 @@ use embassy_time::{Duration, Timer};
 use embedded_services::debug;
 use embedded_services::type_c::Cached;
 use embedded_services::type_c::controller::{InternalResponseData, Response};
-use embedded_usb_pd::constants::{T_SRC_TRANS_REQ_EPR_MS, T_SRC_TRANS_REQ_SPR_MS};
+use embedded_usb_pd::constants::{T_PS_TRANSITION_EPR_MS, T_PS_TRANSITION_SPR_MS};
 use embedded_usb_pd::ucsi::{self, lpm};
 
 use super::*;
 
-impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, M, C, V> {
+impl<'device, M: RawMutex, C: Lockable, V: FwOfferValidator> ControllerWrapper<'device, M, C, V>
+where
+    <C as Lockable>::Inner: Controller,
+{
     async fn process_get_pd_alert(
         &self,
         state: &mut dyn DynPortState<'_>,
         local_port: LocalPortId,
     ) -> Result<Option<Ado>, PdError> {
-        if local_port.0 as usize >= state.num_ports() {
-            return Err(PdError::InvalidPort);
-        }
-
         loop {
-            match state.port_states_mut()[local_port.0 as usize]
+            match state
+                .port_states_mut()
+                .get_mut(local_port.0 as usize)
+                .ok_or(PdError::InvalidPort)?
                 .pd_alerts
                 .1
                 .try_next_message()
@@ -39,9 +41,9 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
     /// Check the sink ready timeout
     ///
     /// After accepting a sink contract (new contract as consumer), the PD spec guarantees that the
-    /// source will be available to provide power after `tSrcTransReq`. This allows us to handle transitions
+    /// source will be available to provide power after `tPSTransition`. This allows us to handle transitions
     /// even for controllers that might not always broadcast sink ready events.
-    pub(super) async fn check_sink_ready_timeout(
+    pub(super) fn check_sink_ready_timeout(
         &self,
         state: &mut dyn DynPortState<'_>,
         status: &PortStatus,
@@ -53,15 +55,23 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
             return Err(PdError::InvalidPort);
         }
 
-        let deadline = &mut state.port_states_mut()[port.0 as usize].sink_ready_deadline;
+        let deadline = &mut state
+            .port_states_mut()
+            .get_mut(port.0 as usize)
+            .ok_or(PdError::InvalidPort)?
+            .sink_ready_deadline;
 
         if new_contract && !sink_ready {
             // Start the timeout
+            // Double the spec maximum transition time to provide a safety margin for hardware/controller delays our out-of-spec controllers.
             let timeout_ms = if status.epr {
-                T_SRC_TRANS_REQ_EPR_MS
+                T_PS_TRANSITION_EPR_MS
             } else {
-                T_SRC_TRANS_REQ_SPR_MS
-            };
+                T_PS_TRANSITION_SPR_MS
+            }
+            .maximum
+            .0 * 2;
+
             debug!("Port{}: Sink ready timeout started for {}ms", port.0, timeout_ms);
             *deadline = Some(Instant::now() + Duration::from_millis(timeout_ms as u64));
         } else if deadline.is_some()
@@ -90,7 +100,11 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
             if let Some(deadline) = deadline {
                 Timer::at(deadline).await;
                 debug!("Port{}: Sink ready timeout reached", i);
-                self.state.lock().await.port_states_mut()[i].sink_ready_deadline = None;
+                if let Some(state) = self.state.lock().await.port_states_mut().get_mut(i) {
+                    state.sink_ready_deadline = None;
+                } else {
+                    error!("Invalid state array index {}", i);
+                }
             } else {
                 pending::<()>().await;
             }
@@ -103,7 +117,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
 
     /// Set the maximum sink voltage for a port
     pub async fn set_max_sink_voltage(&self, local_port: LocalPortId, voltage_mv: Option<u16>) -> Result<(), PdError> {
-        let mut controller = self.get_inner_mut().await;
+        let mut controller = self.controller.lock().await;
         let _ = self
             .process_set_max_sink_voltage(&mut controller, local_port, voltage_mv)
             .await?;
@@ -113,7 +127,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
     /// Process a request to set the maximum sink voltage for a port
     async fn process_set_max_sink_voltage(
         &self,
-        controller: &mut C,
+        controller: &mut C::Inner,
         local_port: LocalPortId,
         voltage_mv: Option<u16>,
     ) -> Result<controller::PortResponseData, PdError> {
@@ -151,18 +165,18 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
 
     async fn process_get_port_status(
         &self,
-        controller: &mut C,
+        controller: &mut C::Inner,
         state: &mut dyn DynPortState<'_>,
         local_port: LocalPortId,
         cached: Cached,
     ) -> Result<controller::PortResponseData, PdError> {
         if cached.0 {
-            if local_port.0 as usize >= state.num_ports() {
-                return Err(PdError::InvalidPort);
-            }
-
             Ok(controller::PortResponseData::PortStatus(
-                state.port_states()[local_port.0 as usize].status,
+                state
+                    .port_states()
+                    .get(local_port.0 as usize)
+                    .ok_or(PdError::InvalidPort)?
+                    .status,
             ))
         } else {
             match controller.get_port_status(local_port).await {
@@ -178,7 +192,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
     /// Handle a port command
     async fn process_port_command(
         &self,
-        controller: &mut C,
+        controller: &mut C::Inner,
         state: &mut dyn DynPortState<'_>,
         command: &controller::PortCommand,
     ) -> Response<'static> {
@@ -187,13 +201,13 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
             return controller::Response::Port(Err(PdError::Busy));
         }
 
-        let local_port = self.registration.pd_controller.lookup_local_port(command.port);
-        if local_port.is_err() {
+        let local_port = if let Ok(port) = self.registration.pd_controller.lookup_local_port(command.port) {
+            port
+        } else {
             debug!("Invalid port: {:?}", command.port);
             return controller::Response::Port(Err(PdError::InvalidPort));
-        }
+        };
 
-        let local_port = local_port.unwrap();
         controller::Response::Port(match command.data {
             controller::PortCommandData::PortStatus(cached) => {
                 self.process_get_port_status(controller, state, local_port, cached)
@@ -201,7 +215,13 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
             }
             controller::PortCommandData::ClearEvents => {
                 let port_index = local_port.0 as usize;
-                let event = core::mem::take(&mut state.port_states_mut()[port_index].pending_events);
+                let state = if let Some(state) = state.port_states_mut().get_mut(port_index) {
+                    state
+                } else {
+                    return controller::Response::Port(Err(PdError::InvalidPort));
+                };
+
+                let event = core::mem::take(&mut state.pending_events);
                 Ok(controller::PortResponseData::ClearEvents(event))
             }
             controller::PortCommandData::RetimerFwUpdateGetState => {
@@ -381,7 +401,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
 
     async fn process_controller_command(
         &self,
-        controller: &mut C,
+        controller: &mut C::Inner,
         state: &mut dyn DynPortState<'_>,
         command: &controller::InternalCommandData,
     ) -> Response<'static> {
@@ -417,7 +437,7 @@ impl<'a, M: RawMutex, C: Controller, V: FwOfferValidator> ControllerWrapper<'a, 
     /// Handle a PD controller command
     pub(super) async fn process_pd_command(
         &self,
-        controller: &mut C,
+        controller: &mut C::Inner,
         state: &mut dyn DynPortState<'_>,
         command: &controller::Command,
     ) -> Response<'static> {

@@ -1,5 +1,3 @@
-use crate::wrapper::backing::ReferencedStorage;
-use crate::wrapper::{ControllerWrapper, FwOfferValidator};
 use ::tps6699x::registers::field_sets::IntEventBus1;
 use ::tps6699x::registers::{PdCcPullUp, PpExtVbusSw, PpIntVbusSw};
 use ::tps6699x::{PORT0, PORT1, TPS66993_NUM_PORTS, TPS66994_NUM_PORTS};
@@ -18,7 +16,7 @@ use embedded_services::type_c::controller::{
     TypeCStateMachineState, UsbControlConfig,
 };
 use embedded_services::type_c::event::PortEvent;
-use embedded_services::{debug, error, info, trace, type_c, warn};
+use embedded_services::{debug, error, trace, type_c, warn};
 use embedded_usb_pd::ado::Ado;
 use embedded_usb_pd::pdinfo::PowerPathStatus;
 use embedded_usb_pd::pdo::{Common, Contract, Rdo, sink, source};
@@ -277,30 +275,22 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
     ///
     /// Drop safety: All state changes happen after await point
     async fn clear_port_events(&mut self, port: LocalPortId) -> Result<PortEvent, Error<Self::BusError>> {
-        if port.0 >= self.port_events.len() as u8 {
-            return PdError::InvalidPort.into();
-        }
-
         Ok(core::mem::replace(
-            &mut self.port_events[port.0 as usize],
+            self.port_events.get_mut(port.0 as usize).ok_or(PdError::InvalidPort)?,
             PortEvent::none(),
         ))
     }
 
     /// Returns the current status of the port
     async fn get_port_status(&mut self, port: LocalPortId) -> Result<PortStatus, Error<Self::BusError>> {
-        if port.0 >= self.port_events.len() as u8 {
-            return PdError::InvalidPort.into();
-        }
-
         let status = self.tps6699x.get_port_status(port).await?;
-        trace!("Port{} status: {:#?}", port.0, status);
+        debug!("Port{} status: {:#?}", port.0, status);
 
         let pd_status = self.tps6699x.get_pd_status(port).await?;
-        trace!("Port{} PD status: {:#?}", port.0, pd_status);
+        debug!("Port{} PD status: {:#?}", port.0, pd_status);
 
         let port_control = self.tps6699x.get_port_control(port).await?;
-        trace!("Port{} control: {:#?}", port.0, port_control);
+        debug!("Port{} control: {:#?}", port.0, port_control);
 
         let mut port_status = PortStatus::default();
 
@@ -321,7 +311,7 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
                 // Got a valid explicit contract
                 if pd_status.is_source() {
                     let pdo = source::Pdo::try_from(pdo_raw).map_err(|_| Error::from(PdError::InvalidParams))?;
-                    let rdo = Rdo::for_pdo(rdo_raw, pdo);
+                    let rdo = Rdo::for_pdo(rdo_raw, pdo).ok_or(Error::Pd(PdError::InvalidParams))?;
                     debug!("PDO: {:#?}", pdo);
                     debug!("RDO: {:#?}", rdo);
                     port_status.available_source_contract = Contract::from_source(pdo, rdo).try_into().ok();
@@ -344,7 +334,7 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
                     }
 
                     let pdo = sink::Pdo::try_from(pdo_raw).map_err(|_| Error::from(PdError::InvalidParams))?;
-                    let rdo = Rdo::for_pdo(rdo_raw, pdo);
+                    let rdo = Rdo::for_pdo(rdo_raw, pdo).ok_or(Error::Pd(PdError::InvalidParams))?;
                     debug!("PDO: {:#?}", pdo);
                     debug!("RDO: {:#?}", rdo);
                     port_status.available_sink_contract = Contract::from_sink(pdo, rdo).try_into().ok();
@@ -467,15 +457,7 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
 
     async fn enable_sink_path(&mut self, port: LocalPortId, enable: bool) -> Result<(), Error<Self::BusError>> {
         debug!("Port{} enable sink path: {}", port.0, enable);
-        match self.tps6699x.enable_sink_path(port, enable).await {
-            // Temporary workaround for autofet rejection
-            // Tracking bug: https://github.com/OpenDevicePartnership/embedded-services/issues/268
-            Err(Error::Pd(PdError::Rejected)) | Err(Error::Pd(PdError::Timeout)) => {
-                info!("Port{} autofet rejection, ignored", port.0);
-                Ok(())
-            }
-            rest => rest,
-        }
+        self.tps6699x.enable_sink_path(port, enable).await
     }
 
     async fn get_pd_alert(&mut self, port: LocalPortId) -> Result<Option<Ado>, Error<Self::BusError>> {
@@ -782,46 +764,34 @@ impl<'a, M: RawMutex, BUS: I2c> AsMut<tps6699x_drv::Tps6699x<'a, M, BUS>> for Tp
     }
 }
 
-/// TPS6699x controller wrapper
-pub type Tps6699xWrapper<'a, M, BUS, V> = ControllerWrapper<'a, M, Tps6699x<'a, M, BUS>, V>;
-
-/// Create a TPS66994 controller wrapper, returns `None` if the number of ports is invalid
-pub fn tps66994<'a, M: RawMutex, BUS: I2c, V: FwOfferValidator>(
+/// Create a TPS66994 object mutex
+pub fn tps66994<'a, M: RawMutex, BUS: I2c>(
     controller: tps6699x_drv::Tps6699x<'a, M, BUS>,
-    storage: &'a ReferencedStorage<'a, TPS66994_NUM_PORTS, M>,
     fw_update_config: FwUpdateConfig,
-    fw_version_validator: V,
-) -> Option<Tps6699xWrapper<'a, M, BUS, V>> {
+) -> Tps6699x<'a, M, BUS> {
     const _: () = assert!(
         TPS66994_NUM_PORTS > 0 && TPS66994_NUM_PORTS <= MAX_SUPPORTED_PORTS,
         "Number of ports exceeds maximum supported"
     );
 
-    ControllerWrapper::try_new(
-        // Statically checked above
-        Tps6699x::try_new(controller, TPS66994_NUM_PORTS, fw_update_config).unwrap(),
-        storage,
-        fw_version_validator,
-    )
+    // Panic safety: statically checked above
+    #[allow(clippy::unwrap_used)]
+    Tps6699x::try_new(controller, TPS66994_NUM_PORTS, fw_update_config).unwrap()
 }
 
-/// Create a new TPS66993 controller wrapper, returns `None` if the number of ports is invalid
-pub fn tps66993<'a, M: RawMutex, BUS: I2c, V: FwOfferValidator>(
+/// Create a TPS66993 object mutex
+pub fn tps66993<'a, M: RawMutex, BUS: I2c>(
     controller: tps6699x_drv::Tps6699x<'a, M, BUS>,
-    backing: &'a ReferencedStorage<'a, TPS66993_NUM_PORTS, M>,
     fw_update_config: FwUpdateConfig,
-    fw_version_validator: V,
-) -> Option<Tps6699xWrapper<'a, M, BUS, V>> {
+) -> Tps6699x<'a, M, BUS> {
     const _: () = assert!(
         TPS66993_NUM_PORTS > 0 && TPS66993_NUM_PORTS <= MAX_SUPPORTED_PORTS,
         "Number of ports exceeds maximum supported"
     );
-    ControllerWrapper::try_new(
-        // Statically checked above
-        Tps6699x::try_new(controller, TPS66993_NUM_PORTS, fw_update_config).unwrap(),
-        backing,
-        fw_version_validator,
-    )
+
+    // Panic safety: statically checked above
+    #[allow(clippy::unwrap_used)]
+    Tps6699x::try_new(controller, TPS66993_NUM_PORTS, fw_update_config).unwrap()
 }
 
 bitfield! {
