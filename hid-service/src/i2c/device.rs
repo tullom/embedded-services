@@ -123,7 +123,6 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
             })))?;
 
         let mut bus = self.bus.lock().await;
-        //use write read and use the input register
         let reg = desc.w_input_register.to_le_bytes();
         if let Err(e) = bus.write_read(self.address, &reg, buf).await {
             error!("Failed to read input report");
@@ -144,7 +143,12 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
 
         let (command_reg, data_reg) = match self.get_hid_descriptor().await {
             Ok(desc) => (desc.w_command_register, desc.w_data_register),
-            Err(_) => (self.device.regs.command_reg, self.device.regs.data_reg),
+            Err(_) => {
+                error!(
+                    "Failed to get HID descriptor, falling back to default registers",
+                );
+                (self.device.regs.command_reg, self.device.regs.data_reg)
+            }
         };
 
         let mut borrow = self.buffer.borrow_mut().map_err(Error::Buffer)?;
