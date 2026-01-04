@@ -144,9 +144,7 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         let (command_reg, data_reg) = match self.get_hid_descriptor().await {
             Ok(desc) => (desc.w_command_register, desc.w_data_register),
             Err(_) => {
-                error!(
-                    "Failed to get HID descriptor, falling back to default registers",
-                );
+                error!("Failed to get HID descriptor, falling back to default registers");
                 (self.device.regs.command_reg, self.device.regs.data_reg)
             }
         };
