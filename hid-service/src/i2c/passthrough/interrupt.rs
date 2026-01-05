@@ -14,7 +14,17 @@ pub struct InterruptSignal<IN: Wait, OUT: OutputPin> {
     signal: Signal<GlobalRawMutex, ()>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Error {
+    /// Failed to read incoming interrupt line
+    IoRead,
+    /// Failed to assert/deassert outgoing interrupt line
+    IoSet,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 enum InterruptState {
     Idle,
     Asserted,
@@ -57,15 +67,15 @@ impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
         self.signal.signal(());
     }
 
-    pub async fn process(&self) {
+    pub async fn process(&self) -> Result<(), Error> {
         let mut int_in = self.int_in.lock().await;
         let mut int_out = self.int_out.lock().await;
 
         trace!("Waiting for interrupt");
 
-        int_in.wait_for_low().await.unwrap();
+        int_in.wait_for_low().await.map_err(|_| Error::IoRead)?;
 
-        int_out.set_low().unwrap();
+        int_out.set_low().map_err(|_| Error::IoSet)?;
         {
             let mut state = self.state.lock().await;
             *state = InterruptState::Asserted;
@@ -73,14 +83,14 @@ impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
         trace!("Interrupt received");
 
         self.signal.wait().await;
-        int_out.set_high().unwrap();
+        int_out.set_high().map_err(|_| Error::IoSet)?;
         trace!("Interrupt deasserted");
 
         {
             let mut state = self.state.lock().await;
             if *state == InterruptState::Reset {
                 *state = InterruptState::Idle;
-                return;
+                return Ok(());
             }
         }
 
@@ -91,5 +101,7 @@ impl<IN: Wait, OUT: OutputPin> InterruptSignal<IN, OUT> {
             *state = InterruptState::Idle;
         }
         trace!("Interrupt cleared");
+
+        Ok(())
     }
 }

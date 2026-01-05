@@ -48,7 +48,11 @@ async fn task(spawner: Spawner) {
     static STORAGE: StaticCell<Storage<1, GlobalRawMutex>> = StaticCell::new();
     let storage = STORAGE.init(Storage::new(CONTROLLER0_ID, CFU0_ID, [(PORT0_ID, POWER0_ID)]));
     static REFERENCED: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
-    let referenced = REFERENCED.init(storage.create_referenced());
+    let referenced = REFERENCED.init(
+        storage
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
 
     static STATE0: StaticCell<mock_controller::ControllerState> = StaticCell::new();
     let state0 = STATE0.init(mock_controller::ControllerState::new());
@@ -68,7 +72,11 @@ async fn task(spawner: Spawner) {
     static STORAGE1: StaticCell<Storage<1, GlobalRawMutex>> = StaticCell::new();
     let storage1 = STORAGE1.init(Storage::new(CONTROLLER1_ID, CFU1_ID, [(PORT1_ID, POWER1_ID)]));
     static REFERENCED1: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
-    let referenced1 = REFERENCED1.init(storage1.create_referenced());
+    let referenced1 = REFERENCED1.init(
+        storage1
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
 
     static STATE1: StaticCell<mock_controller::ControllerState> = StaticCell::new();
     let state1 = STATE1.init(mock_controller::ControllerState::new());
@@ -88,7 +96,11 @@ async fn task(spawner: Spawner) {
     static STORAGE2: StaticCell<Storage<1, GlobalRawMutex>> = StaticCell::new();
     let storage2 = STORAGE2.init(Storage::new(CONTROLLER2_ID, CFU2_ID, [(PORT2_ID, POWER2_ID)]));
     static REFERENCED2: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
-    let referenced2 = REFERENCED2.init(storage2.create_referenced());
+    let referenced2 = REFERENCED2.init(
+        storage2
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
 
     static STATE2: StaticCell<mock_controller::ControllerState> = StaticCell::new();
     let state2 = STATE2.init(mock_controller::ControllerState::new());
@@ -166,9 +178,10 @@ async fn type_c_service_task() -> ! {
 }
 
 #[embassy_executor::task]
-async fn power_policy_service_task() -> ! {
-    power_policy_service::task::task(Default::default()).await;
-    unreachable!()
+async fn power_policy_service_task() {
+    power_policy_service::task::task(Default::default())
+        .await
+        .expect("Failed to start power policy service task");
 }
 
 fn main() {

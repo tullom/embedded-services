@@ -72,6 +72,10 @@ pub struct Service<'a> {
 pub enum PowerPolicyEvent {
     /// Unconstrained state changed
     Unconstrained(power_policy::UnconstrainedState),
+    /// Consumer disconnected
+    ConsumerDisconnected,
+    /// Consumer connected
+    ConsumerConnected,
 }
 
 /// Type-C service events
@@ -104,22 +108,17 @@ impl<'a> Service<'a> {
 
     /// Get the cached port status
     pub async fn get_cached_port_status(&self, port_id: GlobalPortId) -> Result<PortStatus, Error> {
-        if port_id.0 as usize >= MAX_SUPPORTED_PORTS {
-            return Err(Error::InvalidPort);
-        }
-
         let state = self.state.lock().await;
-        Ok(state.port_status[port_id.0 as usize])
+        Ok(*state.port_status.get(port_id.0 as usize).ok_or(Error::InvalidPort)?)
     }
 
     /// Set the cached port status
     async fn set_cached_port_status(&self, port_id: GlobalPortId, status: PortStatus) -> Result<(), Error> {
-        if port_id.0 as usize >= MAX_SUPPORTED_PORTS {
-            return Err(Error::InvalidPort);
-        }
-
         let mut state = self.state.lock().await;
-        state.port_status[port_id.0 as usize] = status;
+        *state
+            .port_status
+            .get_mut(port_id.0 as usize)
+            .ok_or(Error::InvalidPort)? = status;
         Ok(())
     }
 
@@ -154,7 +153,7 @@ impl<'a> Service<'a> {
         }
 
         self.set_cached_port_status(port_id, status).await?;
-        self.generate_ucsi_event(port_id, event).await;
+        self.handle_ucsi_port_event(port_id, event, &status).await;
 
         Ok(())
     }

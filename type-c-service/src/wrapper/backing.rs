@@ -34,14 +34,11 @@
 //!        [(GlobalPortId(0), power::policy::DeviceId(0)), (GlobalPortId(1), power::policy::DeviceId(1))],
 //!    ));
 //!    static REFERENCED: StaticCell<ReferencedStorage<NUM_PORTS, NoopRawMutex>> = StaticCell::new();
-//!    let referenced = REFERENCED.init(storage.create_referenced());
+//!    let referenced = REFERENCED.init(storage.create_referenced().unwrap());
 //!    let _backing = referenced.create_backing().unwrap();
 //! }
 //! ```
-use core::{
-    array::from_fn,
-    cell::{RefCell, RefMut},
-};
+use core::cell::{RefCell, RefMut};
 
 use embassy_sync::{
     blocking_mutex::raw::RawMutex,
@@ -102,20 +99,27 @@ struct InternalState<'a, const N: usize> {
 }
 
 impl<'a, const N: usize> InternalState<'a, N> {
-    fn new<M: RawMutex>(storage: &'a Storage<N, M>) -> Self {
-        Self {
-            controller_state: ControllerState::default(),
-            port_states: from_fn(|i| PortState {
+    fn try_new<M: RawMutex>(storage: &'a Storage<N, M>) -> Option<Self> {
+        let port_states = storage.pd_alerts.each_ref().map(|pd_alert| {
+            Some(PortState {
                 status: PortStatus::new(),
                 sw_status_event: PortStatusChanged::none(),
                 sink_ready_deadline: None,
                 pending_events: PortEvent::none(),
-                pd_alerts: (
-                    storage.pd_alerts[i].dyn_immediate_publisher(),
-                    storage.pd_alerts[i].dyn_subscriber().unwrap(),
-                ),
-            }),
+                pd_alerts: (pd_alert.dyn_immediate_publisher(), pd_alert.dyn_subscriber().ok()?),
+            })
+        });
+
+        if port_states.iter().any(|s| s.is_none()) {
+            return None;
         }
+
+        Some(Self {
+            controller_state: ControllerState::default(),
+            // Panic safety: All array elements checked above
+            #[allow(clippy::unwrap_used)]
+            port_states: port_states.map(|s| s.unwrap()),
+        })
     }
 }
 
@@ -196,8 +200,8 @@ impl<const N: usize, M: RawMutex> Storage<N, M> {
     }
 
     /// Create referenced storage from this storage
-    pub fn create_referenced(&self) -> ReferencedStorage<'_, N, M> {
-        ReferencedStorage::from_storage(self)
+    pub fn create_referenced(&self) -> Option<ReferencedStorage<'_, N, M>> {
+        ReferencedStorage::try_from_storage(self)
     }
 }
 
@@ -213,15 +217,15 @@ pub struct ReferencedStorage<'a, const N: usize, M: RawMutex> {
 
 impl<'a, const N: usize, M: RawMutex> ReferencedStorage<'a, N, M> {
     /// Create a new referenced storage from the given storage and controller ID
-    fn from_storage(storage: &'a Storage<N, M>) -> Self {
-        Self {
+    fn try_from_storage(storage: &'a Storage<N, M>) -> Option<Self> {
+        Some(Self {
             storage,
-            state: RefCell::new(InternalState::new(storage)),
+            state: RefCell::new(InternalState::try_new(storage)?),
             pd_controller: embedded_services::type_c::controller::Device::new(
                 storage.controller_id,
                 storage.pd_ports.as_slice(),
             ),
-        }
+        })
     }
 
     /// Creates the backing, returns `None` if a backing has already been created
