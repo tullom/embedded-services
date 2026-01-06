@@ -30,7 +30,11 @@ async fn opm_task(spawner: Spawner) {
     static STORAGE0: StaticCell<Storage<1, GlobalRawMutex>> = StaticCell::new();
     let storage0 = STORAGE0.init(Storage::new(CONTROLLER0_ID, CFU0_ID, [(PORT0_ID, POWER0_ID)]));
     static REFERENCED0: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
-    let referenced0 = REFERENCED0.init(storage0.create_referenced());
+    let referenced0 = REFERENCED0.init(
+        storage0
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
 
     static STATE0: StaticCell<mock_controller::ControllerState> = StaticCell::new();
     let state0 = STATE0.init(mock_controller::ControllerState::new());
@@ -46,7 +50,11 @@ async fn opm_task(spawner: Spawner) {
     static STORAGE1: StaticCell<Storage<1, GlobalRawMutex>> = StaticCell::new();
     let storage1 = STORAGE1.init(Storage::new(CONTROLLER1_ID, CFU1_ID, [(PORT1_ID, POWER1_ID)]));
     static REFERENCED1: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
-    let referenced1 = REFERENCED1.init(storage1.create_referenced());
+    let referenced1 = REFERENCED1.init(
+        storage1
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
 
     static STATE1: StaticCell<mock_controller::ControllerState> = StaticCell::new();
     let state1 = STATE1.init(mock_controller::ControllerState::new());
@@ -218,15 +226,17 @@ async fn type_c_service_task() -> ! {
                 .set_swap_to_snk(true)
                 .set_swap_to_src(true),
         ),
+        ..Default::default()
     })
     .await;
     unreachable!()
 }
 
 #[embassy_executor::task]
-async fn power_policy_service_task() -> ! {
-    power_policy_service::task::task(Default::default()).await;
-    unreachable!()
+async fn power_policy_service_task() {
+    power_policy_service::task::task(Default::default())
+        .await
+        .expect("Failed to start power policy service task");
 }
 
 #[embassy_executor::task]

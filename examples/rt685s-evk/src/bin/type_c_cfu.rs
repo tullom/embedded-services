@@ -156,9 +156,10 @@ async fn type_c_service_task() -> ! {
 }
 
 #[embassy_executor::task]
-async fn power_policy_service_task() -> ! {
-    power_policy_service::task::task(Default::default()).await;
-    unreachable!()
+async fn power_policy_service_task() {
+    power_policy_service::task::task(Default::default())
+        .await
+        .expect("Failed to start power policy service task");
 }
 
 #[embassy_executor::main]
@@ -216,7 +217,11 @@ async fn main(spawner: Spawner) {
     ));
 
     static REFERENCED: StaticCell<ReferencedStorage<TPS66994_NUM_PORTS, GlobalRawMutex>> = StaticCell::new();
-    let referenced = REFERENCED.init(storage.create_referenced());
+    let referenced = REFERENCED.init(
+        storage
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
 
     info!("Spawining PD controller task");
     static CONTROLLER_MUTEX: StaticCell<Tps6699xMutex<'_>> = StaticCell::new();

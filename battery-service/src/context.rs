@@ -224,14 +224,21 @@ impl Context {
             },
             Err(_) => {
                 error!("Battery state machine timeout!");
-                // Should be infallible
-                self.do_state_machine(BatteryEvent {
-                    event: BatteryEventInner::Timeout,
-                    device_id: event.device_id,
-                })
-                .await
-                .expect("Error type is Infallible");
-                self.battery_response.send(Err(ContextError::Timeout)).await;
+
+                match self
+                    .do_state_machine(BatteryEvent {
+                        event: BatteryEventInner::Timeout,
+                        device_id: event.device_id,
+                    })
+                    .await
+                {
+                    Ok(_) => {
+                        self.battery_response.send(Err(ContextError::Timeout)).await;
+                    }
+                    Err(e) => {
+                        self.battery_response.send(Err(ContextError::StateError(e))).await;
+                    }
+                }
             }
         };
     }
@@ -281,7 +288,7 @@ impl Context {
                     Ok(State::Present(PresentSubstate::NotOperational))
                 }
             }
-            BatteryEventInner::Oem(_, _items) => todo!(),
+            BatteryEventInner::Oem(_, _items) => Err(StateMachineError::InvalidActionInState),
         }
     }
 
@@ -529,7 +536,7 @@ impl Context {
             embedded_services::power::policy::CommsData::ConsumerConnected(_device_id, power_capability) => {
                 *psu_state = PsuState {
                     psu_connected: true,
-                    power_capability: Some(*power_capability),
+                    power_capability: Some(power_capability.capability),
                 }
             }
             _rest => { /* Don't care about anything else */ }

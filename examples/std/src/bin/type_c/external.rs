@@ -29,7 +29,11 @@ async fn controller_task() {
     ));
     static REFERENCED: StaticCell<type_c_service::wrapper::backing::ReferencedStorage<1, GlobalRawMutex>> =
         StaticCell::new();
-    let referenced = REFERENCED.init(backing_storage.create_referenced());
+    let referenced = REFERENCED.init(
+        backing_storage
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
 
     static CONTROLLER: StaticCell<Mutex<GlobalRawMutex, mock_controller::Controller>> = StaticCell::new();
     let controller = CONTROLLER.init(Mutex::new(mock_controller::Controller::new(state)));

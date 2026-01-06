@@ -62,7 +62,11 @@ async fn controller_task(state: &'static mock_controller::ControllerState) {
         [(PORT0_ID, POWER0_ID)],
     ));
     static REFERENCED: StaticCell<ReferencedStorage<1, GlobalRawMutex>> = StaticCell::new();
-    let referenced = REFERENCED.init(storage.create_referenced());
+    let referenced = REFERENCED.init(
+        storage
+            .create_referenced()
+            .expect("Failed to create referenced storage"),
+    );
 
     static CONTROLLER: StaticCell<Mutex<GlobalRawMutex, mock_controller::Controller>> = StaticCell::new();
     let controller = CONTROLLER.init(Mutex::new(mock_controller::Controller::new(state)));
@@ -151,9 +155,10 @@ async fn type_c_service_task() -> ! {
 }
 
 #[embassy_executor::task]
-async fn power_policy_service_task() -> ! {
-    power_policy_service::task::task(Default::default()).await;
-    unreachable!()
+async fn power_policy_service_task() {
+    power_policy_service::task::task(Default::default())
+        .await
+        .expect("Failed to start power policy service task");
 }
 
 fn main() {

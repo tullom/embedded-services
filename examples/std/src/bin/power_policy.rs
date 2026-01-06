@@ -235,9 +235,10 @@ async fn receiver_task() {
 }
 
 #[embassy_executor::task]
-async fn power_policy_task(config: power_policy_service::config::Config) -> ! {
-    power_policy_service::task::task(config).await;
-    unreachable!()
+async fn power_policy_task(config: power_policy_service::config::Config) {
+    power_policy_service::task::task(config)
+        .await
+        .expect("Failed to start power policy service task");
 }
 
 fn main() {
