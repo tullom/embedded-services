@@ -141,13 +141,8 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
     ) -> Result<Option<Response<'static>>, Error<B::Error>> {
         info!("Handling command");
 
-        let (command_reg, data_reg) = match self.get_hid_descriptor().await {
-            Ok(desc) => (desc.w_command_register, desc.w_data_register),
-            Err(_) => {
-                error!("Failed to get HID descriptor, falling back to default registers");
-                (self.device.regs.command_reg, self.device.regs.data_reg)
-            }
-        };
+        let desc = self.get_hid_descriptor().await?;
+        let (command_reg, data_reg) = (desc.w_command_register, desc.w_data_register);
 
         let mut borrow = self.buffer.borrow_mut().map_err(Error::Buffer)?;
         let buf: &mut [u8] = borrow.borrow_mut();
