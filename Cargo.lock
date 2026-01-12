@@ -159,6 +159,7 @@ dependencies = [
 name = "battery-service"
 version = "0.1.0"
 dependencies = [
+ "battery-service-messages",
  "defmt 0.3.100",
  "embassy-futures",
  "embassy-sync",
@@ -170,6 +171,16 @@ dependencies = [
  "log",
  "mctp-rs",
  "zerocopy",
+]
+
+[[package]]
+name = "battery-service-messages"
+version = "0.1.0"
+dependencies = [
+ "defmt 0.3.100",
+ "embedded-batteries-async",
+ "embedded-services",
+ "num_enum",
 ]
 
 [[package]]
@@ -200,14 +211,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf95709a440f45e986983918d0e8a1f30a9b1df04918fc828670606804ac3c09"
 dependencies = [
  "virtue",
-]
-
-[[package]]
-name = "bit-register"
-version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/odp-utilities?rev=2f79d238#2f79d238149049d458199a9a9129b54be7893aee"
-dependencies = [
- "num-traits",
 ]
 
 [[package]]
@@ -450,12 +453,22 @@ version = "0.1.0"
 dependencies = [
  "bbq2",
  "critical-section",
+ "debug-service-messages",
  "defmt 0.3.100",
  "embassy-sync",
  "embassy-time",
  "embedded-services",
  "log",
  "rtt-target",
+]
+
+[[package]]
+name = "debug-service-messages"
+version = "0.1.0"
+dependencies = [
+ "defmt 0.3.100",
+ "embedded-services",
+ "num_enum",
 ]
 
 [[package]]
@@ -910,9 +923,9 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 [[package]]
 name = "espi-device"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/haf-ec-service#8cdd61095471903b1b438dbb0eee142676cc3d74"
+source = "git+https://github.com/OpenDevicePartnership/haf-ec-service#e9c43ec493ba9c4e3db84c73530f919448c07b6d"
 dependencies = [
- "bit-register 0.1.0 (git+https://github.com/OpenDevicePartnership/odp-utilities?rev=2f79d238)",
+ "bit-register",
  "bitflags 2.9.4",
  "num-traits",
  "num_enum",
@@ -924,8 +937,11 @@ dependencies = [
 name = "espi-service"
 version = "0.1.0"
 dependencies = [
+ "battery-service-messages",
+ "bitfield 0.17.0",
  "cortex-m",
  "cortex-m-rt",
+ "debug-service-messages",
  "defmt 0.3.100",
  "embassy-futures",
  "embassy-imxrt",
@@ -934,6 +950,8 @@ dependencies = [
  "embedded-services",
  "log",
  "mctp-rs",
+ "num_enum",
+ "thermal-service-messages",
 ]
 
 [[package]]
@@ -1253,9 +1271,9 @@ dependencies = [
 [[package]]
 name = "mctp-rs"
 version = "0.1.0"
-source = "git+https://github.com/dymk/mctp-rs#4456c65131366acd5e605c7d88a707881fa9e9f0"
+source = "git+https://github.com/dymk/mctp-rs#f3121512468e4776c4b1d2d648b54c7271b97bd9"
 dependencies = [
- "bit-register 0.1.0 (git+https://github.com/OpenDevicePartnership/odp-utilities)",
+ "bit-register",
  "defmt 0.3.100",
  "embedded-batteries",
  "espi-device",
@@ -1986,6 +2004,17 @@ dependencies = [
  "heapless",
  "log",
  "mctp-rs",
+ "thermal-service-messages",
+ "uuid",
+]
+
+[[package]]
+name = "thermal-service-messages"
+version = "0.1.0"
+dependencies = [
+ "defmt 0.3.100",
+ "embedded-services",
+ "num_enum",
  "uuid",
 ]
 
