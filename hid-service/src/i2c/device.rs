@@ -123,7 +123,8 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
             })))?;
 
         let mut bus = self.bus.lock().await;
-        if let Err(e) = bus.read(self.address, buf).await {
+        let reg = desc.w_input_register.to_le_bytes();
+        if let Err(e) = bus.write_read(self.address, &reg, buf).await {
             error!("Failed to read input report");
             return Err(Error::Bus(e));
         }
@@ -140,6 +141,9 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
     ) -> Result<Option<Response<'static>>, Error<B::Error>> {
         info!("Handling command");
 
+        let desc = self.get_hid_descriptor().await?;
+        let (command_reg, data_reg) = (desc.w_command_register, desc.w_data_register);
+
         let mut borrow = self.buffer.borrow_mut().map_err(Error::Buffer)?;
         let buf: &mut [u8] = borrow.borrow_mut();
         let buffer_len = buf.len();
@@ -148,9 +152,9 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         let len = cmd
             .encode_into_slice(
                 buf,
-                Some(self.device.regs.command_reg),
+                Some(command_reg),
                 if opcode.has_response() || opcode.requires_host_data() {
-                    Some(self.device.regs.data_reg)
+                    Some(data_reg)
                 } else {
                     None
                 },
