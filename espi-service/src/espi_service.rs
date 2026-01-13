@@ -1,6 +1,6 @@
 use core::slice;
 
-use crate::mctp::{HostRequest, HostResponse, OdpHeader, OdpMessageType, OdpService};
+use crate::mctp::{HostRequest, HostResult, OdpHeader, OdpMessageType, OdpService};
 use core::borrow::BorrowMut;
 use embassy_imxrt::espi;
 use embassy_sync::channel::Channel;
@@ -25,9 +25,9 @@ embedded_services::define_static_buffer!(assembly_buf, u8, [0u8; ASSEMBLY_BUF_SI
 
 #[derive(Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct HostResponseMessage {
+pub(crate) struct HostResultMessage {
     pub source_endpoint: EndpointID,
-    pub message: HostResponse,
+    pub message: HostResult,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -40,7 +40,7 @@ pub enum Error {
 pub struct Service<'a> {
     endpoint: comms::Endpoint,
     _ec_memory: Mutex<GlobalRawMutex, &'a mut ec_type::structure::ECMemory>,
-    host_tx_queue: Channel<GlobalRawMutex, HostResponseMessage, HOST_TX_QUEUE_SIZE>,
+    host_tx_queue: Channel<GlobalRawMutex, HostResultMessage, HOST_TX_QUEUE_SIZE>,
     assembly_buf_owned_ref: OwnedRef<'a, u8>,
 }
 
@@ -54,7 +54,7 @@ impl Service<'_> {
         }
     }
 
-    pub(crate) async fn wait_for_response(&self) -> HostResponseMessage {
+    pub(crate) async fn wait_for_response(&self) -> HostResultMessage {
         self.host_tx_queue.receive().await
     }
 
@@ -69,14 +69,13 @@ impl Service<'_> {
     async fn serialize_packet_from_subsystem(
         &self,
         espi: &mut espi::Espi<'static>,
-        response: &HostResponseMessage,
+        result: &HostResultMessage,
     ) -> Result<(), Error> {
         let mut assembly_buf_access = self.assembly_buf_owned_ref.borrow_mut().map_err(Error::Buffer)?;
         let pkt_ctx_buf = assembly_buf_access.borrow_mut();
         let mut mctp_ctx = mctp_rs::MctpPacketContext::new(mctp_rs::smbus_espi::SmbusEspiMedium, pkt_ctx_buf);
 
-        let source_service: OdpService =
-            OdpService::try_from(response.source_endpoint).map_err(|_| Error::Serialize)?;
+        let source_service: OdpService = OdpService::try_from(result.source_endpoint).map_err(|_| Error::Serialize)?;
 
         let reply_context: mctp_rs::MctpReplyContext<SmbusEspiMedium> = mctp_rs::MctpReplyContext {
             source_endpoint_id: mctp_rs::EndpointId::Id(0x80),
@@ -93,16 +92,16 @@ impl Service<'_> {
         };
 
         let header = OdpHeader {
-            message_type: OdpMessageType::Response {
-                is_error: !response.message.is_ok(),
+            message_type: OdpMessageType::Result {
+                is_error: !result.message.is_ok(),
             },
             is_datagram: false,
             service: source_service,
-            message_id: response.message.discriminant(),
+            message_id: result.message.discriminant(),
         };
 
         let mut packet_state = mctp_ctx
-            .serialize_packet(reply_context, (header, response.message.clone()))
+            .serialize_packet(reply_context, (header, result.message.clone()))
             .map_err(|e| {
                 error!("serialize_packet_from_subsystem: {:?}", e);
                 Error::Serialize
@@ -142,9 +141,9 @@ impl Service<'_> {
 
     async fn send_mctp_error_response(&self, endpoint: EndpointID, espi: &mut espi::Espi<'static>) {
         // TODO we may want to add more detail in future, but that will require more integration with the debug service
-        let error_msg = HostResponseMessage {
+        let error_msg = HostResultMessage {
             source_endpoint: endpoint,
-            message: HostResponse::Debug(Err(debug_service_messages::DebugError::UnspecifiedFailure)),
+            message: HostResult::Debug(Err(debug_service_messages::DebugError::UnspecifiedFailure)),
         };
         self.serialize_packet_from_subsystem(espi, &error_msg)
             .await
@@ -153,7 +152,7 @@ impl Service<'_> {
             });
     }
 
-    pub(crate) async fn process_response_to_host(&self, espi: &mut espi::Espi<'static>, response: HostResponseMessage) {
+    pub(crate) async fn process_response_to_host(&self, espi: &mut espi::Espi<'static>, response: HostResultMessage) {
         match self.serialize_packet_from_subsystem(espi, &response).await {
             Err(e) => {
                 error!("Packet serialize error {:?}", e);
@@ -173,11 +172,11 @@ impl Service<'_> {
     fn queue_response_to_host(
         &self,
         source_endpoint: EndpointID,
-        message: HostResponse,
+        message: HostResult,
     ) -> Result<(), comms::MailboxDelegateError> {
         debug!("Espi service: recvd response");
         self.host_tx_queue
-            .try_send(HostResponseMessage {
+            .try_send(HostResultMessage {
                 source_endpoint,
                 message,
             })
@@ -189,7 +188,7 @@ impl Service<'_> {
 
 impl comms::MailboxDelegate for Service<'_> {
     fn receive(&self, message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
-        crate::mctp::try_route_request_to_comms(message, |source_endpoint, message| {
+        crate::mctp::send_to_comms(message, |source_endpoint, message| {
             self.queue_response_to_host(source_endpoint, message)
         })
     }
