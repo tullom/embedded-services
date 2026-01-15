@@ -1290,6 +1290,50 @@ impl Context {
         }
     }
 
+    /// Execute an external port command
+    pub(super) async fn execute_external_port_command(
+        &self,
+        command: external::Command,
+    ) -> Result<external::PortResponseData, PdError> {
+        match self.external_command.execute(command).await {
+            external::Response::Port(response) => response,
+            r => {
+                error!("Invalid response: expected external port, got {:?}", r);
+                Err(PdError::InvalidResponse)
+            }
+        }
+    }
+
+    /// Execute an external UCSI command
+    pub(super) async fn execute_external_ucsi_command(&self, command: ucsi::GlobalCommand) -> external::UcsiResponse {
+        match self.external_command.execute(external::Command::Ucsi(command)).await {
+            external::Response::Ucsi(response) => response,
+            r => {
+                error!("Invalid response: expected external UCSI, got {:?}", r);
+                external::UcsiResponse {
+                    // Always notify OPM of an error
+                    notify_opm: true,
+                    cci: ucsi::cci::GlobalCci::new_error(),
+                    data: Err(PdError::InvalidResponse),
+                }
+            }
+        }
+    }
+
+    /// Execute an external controller command
+    pub(super) async fn execute_external_controller_command(
+        &self,
+        command: external::Command,
+    ) -> Result<external::ControllerResponseData<'static>, PdError> {
+        match self.external_command.execute(command).await {
+            external::Response::Controller(response) => response,
+            r => {
+                error!("Invalid response: expected external controller, got {:?}", r);
+                Err(PdError::InvalidResponse)
+            }
+        }
+    }
+
     /// Register a message receiver for type-C messages
     pub async fn register_message_receiver(
         &self,
@@ -1307,53 +1351,6 @@ impl Context {
 /// Default command timeout
 /// set to high value since this is intended to prevent an unresponsive device from blocking the service implementation
 const DEFAULT_TIMEOUT: Duration = Duration::from_millis(5000);
-
-/// Execute an external port command
-pub(super) async fn execute_external_port_command(
-    ctx: &Context,
-    command: external::Command,
-) -> Result<external::PortResponseData, PdError> {
-    match ctx.external_command.execute(command).await {
-        external::Response::Port(response) => response,
-        r => {
-            error!("Invalid response: expected external port, got {:?}", r);
-            Err(PdError::InvalidResponse)
-        }
-    }
-}
-
-/// Execute an external controller command
-pub(super) async fn execute_external_controller_command(
-    ctx: &Context,
-    command: external::Command,
-) -> Result<external::ControllerResponseData<'static>, PdError> {
-    match ctx.external_command.execute(command).await {
-        external::Response::Controller(response) => response,
-        r => {
-            error!("Invalid response: expected external controller, got {:?}", r);
-            Err(PdError::InvalidResponse)
-        }
-    }
-}
-
-/// Execute an external UCSI command
-pub(super) async fn execute_external_ucsi_command(
-    ctx: &Context,
-    command: ucsi::GlobalCommand,
-) -> external::UcsiResponse {
-    match ctx.external_command.execute(external::Command::Ucsi(command)).await {
-        external::Response::Ucsi(response) => response,
-        r => {
-            error!("Invalid response: expected external UCSI, got {:?}", r);
-            external::UcsiResponse {
-                // Always notify OPM of an error
-                notify_opm: true,
-                cci: ucsi::cci::GlobalCci::new_error(),
-                data: Err(PdError::InvalidResponse),
-            }
-        }
-    }
-}
 
 /// Register a PD controller
 pub fn register_controller(

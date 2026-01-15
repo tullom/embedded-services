@@ -175,9 +175,9 @@ impl<'a> Registration<'a> {
 const MAX_BUFFERED_PD_ALERTS: usize = 4;
 
 /// Base storage
-pub struct Storage<const N: usize, M: RawMutex> {
+pub struct Storage<'a, const N: usize, M: RawMutex> {
     // Registration-related
-    context: &'static embedded_services::type_c::controller::Context,
+    context: &'a embedded_services::type_c::controller::Context,
     controller_id: ControllerId,
     pd_ports: [GlobalPortId; N],
     cfu_device: embedded_services::cfu::component::CfuDevice,
@@ -187,9 +187,9 @@ pub struct Storage<const N: usize, M: RawMutex> {
     pd_alerts: [PubSubChannel<M, Ado, MAX_BUFFERED_PD_ALERTS, 1, 0>; N],
 }
 
-impl<const N: usize, M: RawMutex> Storage<N, M> {
+impl<'a, const N: usize, M: RawMutex> Storage<'a, N, M> {
     pub fn new(
-        context: &'static embedded_services::type_c::controller::Context,
+        context: &'a embedded_services::type_c::controller::Context,
         controller_id: ControllerId,
         cfu_id: ComponentId,
         ports: [(GlobalPortId, power::policy::DeviceId); N],
@@ -215,7 +215,7 @@ impl<const N: usize, M: RawMutex> Storage<N, M> {
 /// To simplify usage, we use interior mutability through a ref cell to avoid having to declare the state
 /// completely separately.
 pub struct ReferencedStorage<'a, const N: usize, M: RawMutex> {
-    storage: &'a Storage<N, M>,
+    storage: &'a Storage<'a, N, M>,
     state: RefCell<InternalState<'a, N>>,
     pd_controller: embedded_services::type_c::controller::Device<'a>,
 }

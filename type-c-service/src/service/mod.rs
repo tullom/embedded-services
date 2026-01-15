@@ -163,16 +163,12 @@ impl<'a> Service<'a> {
     }
 
     /// Process external commands
-    async fn process_external_command(
-        &self,
-        controllers: &intrusive_list::IntrusiveList,
-        command: &external::Command,
-    ) -> external::Response<'static> {
+    async fn process_external_command(&self, command: &external::Command) -> external::Response<'static> {
         match command {
             external::Command::Controller(command) => self.process_external_controller_command(command).await,
-            external::Command::Port(command) => self.process_external_port_command(command, controllers).await,
+            external::Command::Port(command) => self.process_external_port_command(command, self.controllers).await,
             external::Command::Ucsi(command) => {
-                external::Response::Ucsi(self.process_ucsi_command(controllers, command).await)
+                external::Response::Ucsi(self.process_ucsi_command(self.controllers, command).await)
             }
         }
     }
@@ -238,7 +234,7 @@ impl<'a> Service<'a> {
             }
             Event::ExternalCommand(request) => {
                 trace!("Processing external command");
-                let response = self.process_external_command(self.controllers, &request.command).await;
+                let response = self.process_external_command(&request.command).await;
                 request.respond(response);
                 Ok(())
             }

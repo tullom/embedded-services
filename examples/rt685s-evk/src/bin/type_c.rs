@@ -13,7 +13,7 @@ use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{self as _, Delay};
 use embedded_cfu_protocol::protocol_definitions::{FwUpdateOffer, FwUpdateOfferResponse, FwVersion, HostToken};
 use embedded_services::power::policy::{CommsMessage, DeviceId as PowerId};
-use embedded_services::type_c::{self, Cached, ControllerId};
+use embedded_services::type_c::{Cached, ControllerId};
 use embedded_services::{GlobalRawMutex, IntrusiveList};
 use embedded_services::{error, info};
 use embedded_usb_pd::GlobalPortId;
@@ -181,24 +181,28 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(pd_controller_task(wrapper));
 
     // Sync our internal state with the hardware
-    type_c::external::sync_controller_state(controller_context, CONTROLLER0_ID)
+    controller_context
+        .sync_controller_state_external(CONTROLLER0_ID)
         .await
         .unwrap();
 
     embassy_time::Timer::after_secs(10).await;
 
-    let status = type_c::external::get_controller_status(controller_context, CONTROLLER0_ID)
+    let status = controller_context
+        .get_controller_status_external(CONTROLLER0_ID)
         .await
         .unwrap();
 
     info!("Controller status: {:?}", status);
 
-    let status = type_c::external::get_port_status(controller_context, PORT0_ID, Cached(true))
+    let status = controller_context
+        .get_port_status_external(PORT0_ID, Cached(true))
         .await
         .unwrap();
     info!("Port status: {:?}", status);
 
-    let status = type_c::external::get_port_status(controller_context, PORT1_ID, Cached(true))
+    let status = controller_context
+        .get_port_status_external(PORT1_ID, Cached(true))
         .await
         .unwrap();
     info!("Port status: {:?}", status);

@@ -5,7 +5,7 @@ use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::Timer;
 use embedded_services::{
     GlobalRawMutex, IntrusiveList, power,
-    type_c::{Cached, ControllerId, controller::Context, external},
+    type_c::{Cached, ControllerId, controller::Context},
 };
 use embedded_usb_pd::GlobalPortId;
 use log::*;
@@ -36,50 +36,59 @@ async fn task(_spawner: Spawner, controller_context: &'static Context) {
     // Allow the controller to initialize and register itself
     Timer::after_secs(1).await;
     info!("Getting controller status");
-    let controller_status = external::get_controller_status(controller_context, ControllerId(0))
+    let controller_status = controller_context
+        .get_controller_status_external(ControllerId(0))
         .await
         .unwrap();
     info!("Controller status: {controller_status:?}");
 
     info!("Getting port status");
-    let port_status = external::get_port_status(controller_context, GlobalPortId(0), Cached(true))
+    let port_status = controller_context
+        .get_port_status_external(GlobalPortId(0), Cached(true))
         .await
         .unwrap();
     info!("Port status: {port_status:?}");
 
     info!("Getting retimer fw update status");
-    let rt_fw_update_status = external::port_get_rt_fw_update_status(controller_context, GlobalPortId(0))
+    let rt_fw_update_status = controller_context
+        .port_get_rt_fw_update_status_external(GlobalPortId(0))
         .await
         .unwrap();
     info!("Get retimer fw update status: {rt_fw_update_status:?}");
 
     info!("Setting retimer fw update state");
-    external::port_set_rt_fw_update_state(controller_context, GlobalPortId(0))
+    controller_context
+        .port_set_rt_fw_update_state_external(GlobalPortId(0))
         .await
         .unwrap();
 
     info!("Clearing retimer fw update state");
-    external::port_clear_rt_fw_update_state(controller_context, GlobalPortId(0))
+    controller_context
+        .port_clear_rt_fw_update_state_external(GlobalPortId(0))
         .await
         .unwrap();
 
     info!("Setting retimer compliance");
-    external::port_set_rt_compliance(controller_context, GlobalPortId(0))
+    controller_context
+        .port_set_rt_compliance_external(GlobalPortId(0))
         .await
         .unwrap();
 
     info!("Setting max sink voltage");
-    external::set_max_sink_voltage(controller_context, GlobalPortId(0), Some(5000))
+    controller_context
+        .set_max_sink_voltage_external(GlobalPortId(0), Some(5000))
         .await
         .unwrap();
 
     info!("Clearing dead battery flag");
-    external::clear_dead_battery_flag(controller_context, GlobalPortId(0))
+    controller_context
+        .clear_dead_battery_flag_external(GlobalPortId(0))
         .await
         .unwrap();
 
     info!("Reconfiguring retimer");
-    external::reconfigure_retimer(controller_context, GlobalPortId(0))
+    controller_context
+        .reconfigure_retimer_external(GlobalPortId(0))
         .await
         .unwrap();
 }

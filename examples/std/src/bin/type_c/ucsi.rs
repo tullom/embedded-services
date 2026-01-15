@@ -7,7 +7,7 @@ use embedded_services::IntrusiveList;
 use embedded_services::power::policy::{self, PowerCapability};
 use embedded_services::type_c::ControllerId;
 use embedded_services::type_c::controller::Context;
-use embedded_services::type_c::external::{UcsiResponseResult, execute_ucsi_command};
+use embedded_services::type_c::external::UcsiResponseResult;
 use embedded_usb_pd::GlobalPortId;
 use embedded_usb_pd::ucsi::lpm::get_connector_capability::OperationModeFlags;
 use embedded_usb_pd::ucsi::ppm::ack_cc_ci::Ack;
@@ -39,7 +39,8 @@ async fn opm_task(context: &'static Context, state: [&'static mock_controller::C
     };
 
     info!("Resetting PPM...");
-    let response: UcsiResponseResult = execute_ucsi_command(context, Command::PpmCommand(ppm::Command::PpmReset))
+    let response: UcsiResponseResult = context
+        .execute_ucsi_command_external(Command::PpmCommand(ppm::Command::PpmReset))
         .await
         .into();
     let response = response.unwrap();
@@ -53,16 +54,14 @@ async fn opm_task(context: &'static Context, state: [&'static mock_controller::C
     let mut notifications = NotificationEnable::default();
     notifications.set_cmd_complete(true);
     notifications.set_connect_change(true);
-    let response: UcsiResponseResult = execute_ucsi_command(
-        context,
-        Command::PpmCommand(ppm::Command::SetNotificationEnable(
+    let response: UcsiResponseResult = context
+        .execute_ucsi_command_external(Command::PpmCommand(ppm::Command::SetNotificationEnable(
             ppm::set_notification_enable::Args {
                 notification_enable: notifications,
             },
-        )),
-    )
-    .await
-    .into();
+        )))
+        .await
+        .into();
     let response = response.unwrap();
     if !response.cci.cmd_complete() || response.cci.error() {
         error!("Set Notification enable failed: {:?}", response.cci);
@@ -71,14 +70,12 @@ async fn opm_task(context: &'static Context, state: [&'static mock_controller::C
     }
 
     info!("Sending command complete ack...");
-    let response: UcsiResponseResult = execute_ucsi_command(
-        context,
-        Command::PpmCommand(ppm::Command::AckCcCi(ppm::ack_cc_ci::Args {
+    let response: UcsiResponseResult = context
+        .execute_ucsi_command_external(Command::PpmCommand(ppm::Command::AckCcCi(ppm::ack_cc_ci::Args {
             ack: *Ack::default().set_command_complete(true),
-        })),
-    )
-    .await
-    .into();
+        })))
+        .await
+        .into();
     let response = response.unwrap();
     if !response.cci.ack_command() || response.cci.error() {
         error!("Sending command complete ack failed: {:?}", response.cci);
@@ -94,15 +91,13 @@ async fn opm_task(context: &'static Context, state: [&'static mock_controller::C
     embassy_time::Timer::after_millis(1000).await;
 
     info!("Port 0: Get connector status...");
-    let response: UcsiResponseResult = execute_ucsi_command(
-        context,
-        Command::LpmCommand(lpm::GlobalCommand::new(
+    let response: UcsiResponseResult = context
+        .execute_ucsi_command_external(Command::LpmCommand(lpm::GlobalCommand::new(
             GlobalPortId(0),
             lpm::CommandData::GetConnectorStatus,
-        )),
-    )
-    .await
-    .into();
+        )))
+        .await
+        .into();
     let response = response.unwrap();
     if !response.cci.cmd_complete() || response.cci.error() {
         error!("Get connector status failed: {:?}", response.cci);
@@ -114,14 +109,12 @@ async fn opm_task(context: &'static Context, state: [&'static mock_controller::C
     }
 
     info!("Sending command complete ack...");
-    let response: UcsiResponseResult = execute_ucsi_command(
-        context,
-        Command::PpmCommand(ppm::Command::AckCcCi(ppm::ack_cc_ci::Args {
+    let response: UcsiResponseResult = context
+        .execute_ucsi_command_external(Command::PpmCommand(ppm::Command::AckCcCi(ppm::ack_cc_ci::Args {
             ack: *Ack::default().set_command_complete(true).set_connector_change(true),
-        })),
-    )
-    .await
-    .into();
+        })))
+        .await
+        .into();
     let response = response.unwrap();
     if !response.cci.ack_command() || response.cci.error() {
         error!("Sending command complete ack failed: {:?}", response.cci);
@@ -133,15 +126,13 @@ async fn opm_task(context: &'static Context, state: [&'static mock_controller::C
     }
 
     info!("Port 1: Get connector status...");
-    let response: UcsiResponseResult = execute_ucsi_command(
-        context,
-        Command::LpmCommand(lpm::GlobalCommand::new(
+    let response: UcsiResponseResult = context
+        .execute_ucsi_command_external(Command::LpmCommand(lpm::GlobalCommand::new(
             GlobalPortId(1),
             lpm::CommandData::GetConnectorStatus,
-        )),
-    )
-    .await
-    .into();
+        )))
+        .await
+        .into();
     let response = response.unwrap();
     if !response.cci.cmd_complete() || response.cci.error() {
         error!("Get connector status failed: {:?}", response.cci);
@@ -153,14 +144,12 @@ async fn opm_task(context: &'static Context, state: [&'static mock_controller::C
     }
 
     info!("Sending command complete ack...");
-    let response: UcsiResponseResult = execute_ucsi_command(
-        context,
-        Command::PpmCommand(ppm::Command::AckCcCi(ppm::ack_cc_ci::Args {
+    let response: UcsiResponseResult = context
+        .execute_ucsi_command_external(Command::PpmCommand(ppm::Command::AckCcCi(ppm::ack_cc_ci::Args {
             ack: *Ack::default().set_command_complete(true).set_connector_change(true),
-        })),
-    )
-    .await
-    .into();
+        })))
+        .await
+        .into();
     let response = response.unwrap();
     if !response.cci.ack_command() || response.cci.error() {
         error!("Sending command complete ack failed: {:?}", response.cci);

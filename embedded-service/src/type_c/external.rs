@@ -5,19 +5,13 @@ use crate::{
     intrusive_list,
     type_c::{
         Cached,
-        controller::{
-            Context, PdStateMachineConfig, TbtConfig, TypeCStateMachineState, UsbControlConfig,
-            execute_external_ucsi_command,
-        },
+        controller::{Context, PdStateMachineConfig, TbtConfig, TypeCStateMachineState, UsbControlConfig},
     },
 };
 
 use super::{
     ControllerId,
-    controller::{
-        ControllerStatus, DpConfig, DpStatus, PortStatus, RetimerFwUpdateState, SendVdm,
-        execute_external_controller_command, execute_external_port_command, lookup_controller,
-    },
+    controller::{ControllerStatus, DpConfig, DpStatus, PortStatus, RetimerFwUpdateState, SendVdm, lookup_controller},
 };
 
 /// Data for controller-specific commands
@@ -172,68 +166,310 @@ pub enum Response<'a> {
     Ucsi(UcsiResponse),
 }
 
-/// Get the status of the given port.
-///
-/// Use the `cached` argument to specify whether to use cached data or force a fetch of register values.
-pub async fn get_port_status(ctx: &Context, port: GlobalPortId, cached: Cached) -> Result<PortStatus, PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::PortStatus(cached),
-        }),
-    )
-    .await?
-    {
-        PortResponseData::PortStatus(status) => Ok(status),
-        _ => Err(PdError::InvalidResponse),
+impl Context {
+    /// Get the status of the given port.
+    ///
+    /// Use the `cached` argument to specify whether to use cached data or force a fetch of register values.
+    pub async fn get_port_status_external(&self, port: GlobalPortId, cached: Cached) -> Result<PortStatus, PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::PortStatus(cached),
+            }))
+            .await?
+        {
+            PortResponseData::PortStatus(status) => Ok(status),
+            _ => Err(PdError::InvalidResponse),
+        }
     }
-}
 
-/// Get the status of the given port by its controller and local port ID.
-///
-/// Use the `cached` argument to specify whether to use cached data or force a fetch of register values.
-pub async fn get_controller_port_status(
-    ctx: &Context,
-    controllers: &intrusive_list::IntrusiveList,
-    controller: ControllerId,
-    port: LocalPortId,
-    cached: Cached,
-) -> Result<PortStatus, PdError> {
-    let global_port = controller_port_to_global_id(controllers, controller, port)?;
-    get_port_status(ctx, global_port, cached).await
-}
-
-/// Reset the given controller.
-pub async fn reset_controller(ctx: &Context, controller_id: ControllerId) -> Result<(), PdError> {
-    match execute_external_controller_command(
-        ctx,
-        Command::Controller(ControllerCommand {
-            id: controller_id,
-            data: ControllerCommandData::Reset,
-        }),
-    )
-    .await?
-    {
-        ControllerResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
+    /// Get the status of the given port by its controller and local port ID.
+    ///
+    /// Use the `cached` argument to specify whether to use cached data or force a fetch of register values.
+    pub async fn get_controller_port_status_external(
+        &self,
+        controllers: &intrusive_list::IntrusiveList,
+        controller: ControllerId,
+        port: LocalPortId,
+        cached: Cached,
+    ) -> Result<PortStatus, PdError> {
+        let global_port = controller_port_to_global_id(controllers, controller, port)?;
+        self.get_port_status_external(global_port, cached).await
     }
-}
 
-/// Get the status of the given controller
-#[allow(unreachable_patterns)]
-pub async fn get_controller_status(ctx: &Context, id: ControllerId) -> Result<ControllerStatus<'static>, PdError> {
-    match execute_external_controller_command(
-        ctx,
-        Command::Controller(ControllerCommand {
-            id,
-            data: ControllerCommandData::ControllerStatus,
-        }),
-    )
-    .await?
-    {
-        ControllerResponseData::ControllerStatus(status) => Ok(status),
-        _ => Err(PdError::InvalidResponse),
+    /// Reset the given controller.
+    pub async fn reset_controller_external(&self, controller_id: ControllerId) -> Result<(), PdError> {
+        match self
+            .execute_external_controller_command(Command::Controller(ControllerCommand {
+                id: controller_id,
+                data: ControllerCommandData::Reset,
+            }))
+            .await?
+        {
+            ControllerResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Get the status of the given controller
+    #[allow(unreachable_patterns)]
+    pub async fn get_controller_status_external(&self, id: ControllerId) -> Result<ControllerStatus<'static>, PdError> {
+        match self
+            .execute_external_controller_command(Command::Controller(ControllerCommand {
+                id,
+                data: ControllerCommandData::ControllerStatus,
+            }))
+            .await?
+        {
+            ControllerResponseData::ControllerStatus(status) => Ok(status),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Get the retimer fw update status of the given port
+    pub async fn port_get_rt_fw_update_status_external(
+        &self,
+        port: GlobalPortId,
+    ) -> Result<RetimerFwUpdateState, PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::RetimerFwUpdateGetState,
+            }))
+            .await?
+        {
+            PortResponseData::RetimerFwUpdateGetState(status) => Ok(status),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set the retimer fw update state of the given port
+    pub async fn port_set_rt_fw_update_state_external(&self, port: GlobalPortId) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::RetimerFwUpdateSetState,
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Clear the retimer fw update state of the given port
+    pub async fn port_clear_rt_fw_update_state_external(&self, port: GlobalPortId) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::RetimerFwUpdateClearState,
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set the retimer comliance state of the given port
+    pub async fn port_set_rt_compliance_external(&self, port: GlobalPortId) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::SetRetimerCompliance,
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Trigger a sync of the controller state
+    pub async fn sync_controller_state_external(&self, id: ControllerId) -> Result<(), PdError> {
+        match self
+            .execute_external_controller_command(Command::Controller(ControllerCommand {
+                id,
+                data: ControllerCommandData::SyncState,
+            }))
+            .await?
+        {
+            ControllerResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set the maximum voltage for the given port to a specific value.
+    ///
+    /// See [`PortCommandData::SetMaxSinkVoltage::max_voltage_mv`] for details on the `max_voltage_mv` parameter.
+    pub async fn set_max_sink_voltage_external(
+        &self,
+        port: GlobalPortId,
+        max_voltage_mv: Option<u16>,
+    ) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::SetMaxSinkVoltage { max_voltage_mv },
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Clear the dead battery flag for the given port.
+    pub async fn clear_dead_battery_flag_external(&self, port: GlobalPortId) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::ClearDeadBatteryFlag,
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Reconfigure the retimer for the given port.
+    pub async fn reconfigure_retimer_external(&self, port: GlobalPortId) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::ReconfigureRetimer,
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Execute a UCSI command
+    pub async fn execute_ucsi_command_external(&self, command: ucsi::GlobalCommand) -> UcsiResponse {
+        self.execute_external_ucsi_command(command).await
+    }
+
+    /// Send vdm to the given port
+    pub async fn send_vdm_external(&self, port: GlobalPortId, tx_vdm: SendVdm) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::SendVdm(tx_vdm),
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set USB control configuration
+    pub async fn set_usb_control_external(&self, port: GlobalPortId, config: UsbControlConfig) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::SetUsbControl(config),
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Get DisplayPort status for the given port
+    pub async fn get_dp_status_external(&self, port: GlobalPortId) -> Result<DpStatus, PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::GetDpStatus,
+            }))
+            .await?
+        {
+            PortResponseData::GetDpStatus(status) => Ok(status),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set DisplayPort configuration for the given port
+    pub async fn set_dp_config_external(&self, port: GlobalPortId, config: DpConfig) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::SetDpConfig(config),
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Execute DisplayPort reset for the given port
+    pub async fn execute_drst_external(&self, port: GlobalPortId) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::ExecuteDrst,
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set Thunderbolt configuration for the given port
+    pub async fn set_tbt_config_external(&self, port: GlobalPortId, config: TbtConfig) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::SetTbtConfig(config),
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set PD state-machine configuration for the given port
+    pub async fn set_pd_state_machine_config_external(
+        &self,
+        port: GlobalPortId,
+        config: PdStateMachineConfig,
+    ) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::SetPdStateMachineConfig(config),
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set Type-C state-machine configuration for the given port
+    pub async fn set_type_c_state_machine_config_external(
+        &self,
+        port: GlobalPortId,
+        state: TypeCStateMachineState,
+    ) -> Result<(), PdError> {
+        match self
+            .execute_external_port_command(Command::Port(PortCommand {
+                port,
+                data: PortCommandData::SetTypeCStateMachineConfig(state),
+            }))
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
     }
 }
 
@@ -254,282 +490,7 @@ pub fn controller_port_to_global_id(
     lookup_controller(controllers, controller_id)?.lookup_global_port(port_id)
 }
 
-/// Get the retimer fw update status of the given port
-pub async fn port_get_rt_fw_update_status(ctx: &Context, port: GlobalPortId) -> Result<RetimerFwUpdateState, PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::RetimerFwUpdateGetState,
-        }),
-    )
-    .await?
-    {
-        PortResponseData::RetimerFwUpdateGetState(status) => Ok(status),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Set the retimer fw update state of the given port
-pub async fn port_set_rt_fw_update_state(ctx: &Context, port: GlobalPortId) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::RetimerFwUpdateSetState,
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Clear the retimer fw update state of the given port
-pub async fn port_clear_rt_fw_update_state(ctx: &Context, port: GlobalPortId) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::RetimerFwUpdateClearState,
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Set the retimer comliance state of the given port
-pub async fn port_set_rt_compliance(ctx: &Context, port: GlobalPortId) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::SetRetimerCompliance,
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Trigger a sync of the controller state
-pub async fn sync_controller_state(ctx: &Context, id: ControllerId) -> Result<(), PdError> {
-    match execute_external_controller_command(
-        ctx,
-        Command::Controller(ControllerCommand {
-            id,
-            data: ControllerCommandData::SyncState,
-        }),
-    )
-    .await?
-    {
-        ControllerResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
 /// Get number of ports on the system
 pub fn get_num_ports(controllers: &intrusive_list::IntrusiveList) -> usize {
     super::controller::get_num_ports(controllers)
-}
-
-/// Set the maximum voltage for the given port to a specific value.
-///
-/// See [`PortCommandData::SetMaxSinkVoltage::max_voltage_mv`] for details on the `max_voltage_mv` parameter.
-pub async fn set_max_sink_voltage(
-    ctx: &Context,
-    port: GlobalPortId,
-    max_voltage_mv: Option<u16>,
-) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::SetMaxSinkVoltage { max_voltage_mv },
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Clear the dead battery flag for the given port.
-pub async fn clear_dead_battery_flag(ctx: &Context, port: GlobalPortId) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::ClearDeadBatteryFlag,
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Reconfigure the retimer for the given port.
-pub async fn reconfigure_retimer(ctx: &Context, port: GlobalPortId) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::ReconfigureRetimer,
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Execute a UCSI command
-pub async fn execute_ucsi_command(ctx: &Context, command: ucsi::GlobalCommand) -> UcsiResponse {
-    execute_external_ucsi_command(ctx, command).await
-}
-
-/// Send vdm to the given port
-pub async fn send_vdm(ctx: &Context, port: GlobalPortId, tx_vdm: SendVdm) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::SendVdm(tx_vdm),
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Set USB control configuration
-pub async fn set_usb_control(ctx: &Context, port: GlobalPortId, config: UsbControlConfig) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::SetUsbControl(config),
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Get DisplayPort status for the given port
-pub async fn get_dp_status(ctx: &Context, port: GlobalPortId) -> Result<DpStatus, PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::GetDpStatus,
-        }),
-    )
-    .await?
-    {
-        PortResponseData::GetDpStatus(status) => Ok(status),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Set DisplayPort configuration for the given port
-pub async fn set_dp_config(ctx: &Context, port: GlobalPortId, config: DpConfig) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::SetDpConfig(config),
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Execute DisplayPort reset for the given port
-pub async fn execute_drst(ctx: &Context, port: GlobalPortId) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::ExecuteDrst,
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Set Thunderbolt configuration for the given port
-pub async fn set_tbt_config(ctx: &Context, port: GlobalPortId, config: TbtConfig) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::SetTbtConfig(config),
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Set PD state-machine configuration for the given port
-pub async fn set_pd_state_machine_config(
-    ctx: &Context,
-    port: GlobalPortId,
-    config: PdStateMachineConfig,
-) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::SetPdStateMachineConfig(config),
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
-}
-
-/// Set Type-C state-machine configuration for the given port
-pub async fn set_type_c_state_machine_config(
-    ctx: &Context,
-    port: GlobalPortId,
-    state: TypeCStateMachineState,
-) -> Result<(), PdError> {
-    match execute_external_port_command(
-        ctx,
-        Command::Port(PortCommand {
-            port,
-            data: PortCommandData::SetTypeCStateMachineConfig(state),
-        }),
-    )
-    .await?
-    {
-        PortResponseData::Complete => Ok(()),
-        _ => Err(PdError::InvalidResponse),
-    }
 }
