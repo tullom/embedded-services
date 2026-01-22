@@ -9,21 +9,24 @@ use embassy_imxrt::i2c::Async;
 use embassy_imxrt::i2c::master::{Config, I2cMaster};
 use embassy_imxrt::{bind_interrupts, peripherals};
 use embassy_sync::mutex::Mutex;
+use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{self as _, Delay};
 use embedded_cfu_protocol::protocol_definitions::{FwUpdateOffer, FwUpdateOfferResponse, FwVersion, HostToken};
-use embedded_services::GlobalRawMutex;
-use embedded_services::power::policy::DeviceId as PowerId;
-use embedded_services::type_c::{self, Cached, ControllerId};
+use embedded_services::power::policy::{CommsMessage, DeviceId as PowerId};
+use embedded_services::type_c::{Cached, ControllerId};
+use embedded_services::{GlobalRawMutex, IntrusiveList};
 use embedded_services::{error, info};
 use embedded_usb_pd::GlobalPortId;
 use static_cell::StaticCell;
 use tps6699x::asynchronous::embassy as tps6699x;
 use type_c_service::driver::tps6699x::{self as tps6699x_drv};
+use type_c_service::service::Service;
 use type_c_service::wrapper::ControllerWrapper;
 use type_c_service::wrapper::backing::{ReferencedStorage, Storage};
 
 extern crate rt685s_evk_example;
 
+const NUM_PD_CONTROLLERS: usize = 1;
 const CONTROLLER0_ID: ControllerId = ControllerId(0);
 const PORT0_ID: GlobalPortId = GlobalPortId(0);
 const PORT1_ID: GlobalPortId = GlobalPortId(1);
@@ -65,16 +68,40 @@ async fn interrupt_task(mut int_in: Input<'static>, mut interrupt: Interrupt<'st
 }
 
 #[embassy_executor::task]
-async fn type_c_service_task() -> ! {
-    type_c_service::task(Default::default()).await;
-    unreachable!()
-}
-
-#[embassy_executor::task]
 async fn power_policy_service_task() {
     power_policy_service::task::task(Default::default())
         .await
         .expect("Failed to start power policy service task");
+}
+
+#[embassy_executor::task]
+async fn service_task(
+    controller_context: &'static embedded_services::type_c::controller::Context,
+    controllers: &'static IntrusiveList,
+    wrappers: [&'static Wrapper<'static>; NUM_PD_CONTROLLERS],
+) {
+    info!("Starting type-c task");
+
+    // The service is the only receiver and we only use a DynImmediatePublisher, which doesn't take a publisher slot
+    static POWER_POLICY_CHANNEL: StaticCell<PubSubChannel<GlobalRawMutex, CommsMessage, 4, 1, 0>> = StaticCell::new();
+
+    let power_policy_channel = POWER_POLICY_CHANNEL.init(PubSubChannel::new());
+    let power_policy_publisher = power_policy_channel.dyn_immediate_publisher();
+    // Guaranteed to not panic since we initialized the channel above
+    let power_policy_subscriber = power_policy_channel.dyn_subscriber().unwrap();
+
+    let service = Service::create(
+        type_c_service::service::config::Config::default(),
+        controller_context,
+        controllers,
+        power_policy_publisher,
+        power_policy_subscriber,
+    );
+
+    static SERVICE: StaticCell<Service> = StaticCell::new();
+    let service = SERVICE.init(service);
+
+    type_c_service::task::task(service, wrappers).await;
 }
 
 #[embassy_executor::main]
@@ -84,13 +111,13 @@ async fn main(spawner: Spawner) {
     info!("Embedded service init");
     embedded_services::init().await;
 
-    type_c::controller::init();
-
     info!("Spawining power policy task");
     spawner.must_spawn(power_policy_service_task());
 
-    info!("Spawining type-c service task");
-    spawner.must_spawn(type_c_service_task());
+    static CONTROLLER_LIST: StaticCell<IntrusiveList> = StaticCell::new();
+    let controllers = CONTROLLER_LIST.init(IntrusiveList::new());
+    static CONTEXT: StaticCell<embedded_services::type_c::controller::Context> = StaticCell::new();
+    let controller_context = CONTEXT.init(embedded_services::type_c::controller::Context::new());
 
     let int_in = Input::new(p.PIO1_7, Pull::Up, Inverter::Disabled);
     static BUS: StaticCell<Mutex<GlobalRawMutex, BusMaster<'static>>> = StaticCell::new();
@@ -127,6 +154,7 @@ async fn main(spawner: Spawner) {
 
     static STORAGE: StaticCell<Storage<TPS66994_NUM_PORTS, GlobalRawMutex>> = StaticCell::new();
     let storage = STORAGE.init(Storage::new(
+        controller_context,
         CONTROLLER0_ID,
         0, // CFU component ID
         [(PORT0_ID, PORT0_PWR_ID), (PORT1_ID, PORT1_PWR_ID)],
@@ -147,21 +175,35 @@ async fn main(spawner: Spawner) {
     let wrapper =
         WRAPPER.init(ControllerWrapper::try_new(controller_mutex, Default::default(), referenced, Validator).unwrap());
 
-    wrapper.register().await.unwrap();
+    info!("Spawining type-c service task");
+    spawner.must_spawn(service_task(controller_context, controllers, [wrapper]));
+
     spawner.must_spawn(pd_controller_task(wrapper));
 
     // Sync our internal state with the hardware
-    type_c::external::sync_controller_state(CONTROLLER0_ID).await.unwrap();
+    controller_context
+        .sync_controller_state_external(CONTROLLER0_ID)
+        .await
+        .unwrap();
 
     embassy_time::Timer::after_secs(10).await;
 
-    let status = type_c::external::get_controller_status(CONTROLLER0_ID).await.unwrap();
+    let status = controller_context
+        .get_controller_status_external(CONTROLLER0_ID)
+        .await
+        .unwrap();
 
     info!("Controller status: {:?}", status);
 
-    let status = type_c::external::get_port_status(PORT0_ID, Cached(true)).await.unwrap();
+    let status = controller_context
+        .get_port_status_external(PORT0_ID, Cached(true))
+        .await
+        .unwrap();
     info!("Port status: {:?}", status);
 
-    let status = type_c::external::get_port_status(PORT1_ID, Cached(true)).await.unwrap();
+    let status = controller_context
+        .get_port_status_external(PORT1_ID, Cached(true))
+        .await
+        .unwrap();
     info!("Port status: {:?}", status);
 }

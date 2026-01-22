@@ -1,39 +1,31 @@
 use core::future::Future;
-use embassy_sync::pubsub::PubSubChannel;
-use embedded_services::{GlobalRawMutex, error, info, power};
-use static_cell::StaticCell;
+use embedded_services::{error, info};
 
-use crate::service::config::Config;
-use crate::service::{MAX_POWER_POLICY_EVENTS, Service};
+use crate::{service::Service, wrapper::ControllerWrapper};
 
 /// Task to run the Type-C service, takes a closure to customize the event loop
-pub async fn task_closure<'a, Fut: Future<Output = ()>, F: Fn(&'a Service) -> Fut>(config: Config, f: F) {
+pub async fn task_closure<'a, M, C, V, Fut: Future<Output = ()>, F: Fn(&'a Service) -> Fut, const N: usize>(
+    service: &'static Service<'a>,
+    wrappers: [&'a ControllerWrapper<'a, M, C, V>; N],
+    f: F,
+) where
+    M: embassy_sync::blocking_mutex::raw::RawMutex,
+    C: embedded_services::sync::Lockable,
+    V: crate::wrapper::FwOfferValidator,
+    <C as embedded_services::sync::Lockable>::Inner: embedded_services::type_c::controller::Controller,
+{
     info!("Starting type-c task");
-
-    // The service is the only receiver and we only use a DynImmediatePublisher, which doesn't take a publisher slot
-    static POWER_POLICY_CHANNEL: StaticCell<
-        PubSubChannel<GlobalRawMutex, power::policy::CommsMessage, MAX_POWER_POLICY_EVENTS, 1, 0>,
-    > = StaticCell::new();
-
-    let power_policy_channel = POWER_POLICY_CHANNEL.init(PubSubChannel::new());
-    let power_policy_publisher = power_policy_channel.dyn_immediate_publisher();
-    let Ok(power_policy_subscriber) = power_policy_channel.dyn_subscriber() else {
-        error!("Failed to create power policy subscriber");
-        return;
-    };
-
-    let service = Service::create(config, power_policy_publisher, power_policy_subscriber);
-    let Some(service) = service else {
-        error!("Type-C service already initialized");
-        return;
-    };
-
-    static SERVICE: StaticCell<Service> = StaticCell::new();
-    let service = SERVICE.init(service);
 
     if service.register_comms().is_err() {
         error!("Failed to register type-c service endpoint");
         return;
+    }
+
+    for controller_wrapper in wrappers {
+        if controller_wrapper.register(service.controllers()).await.is_err() {
+            error!("Failed to register a controller");
+            return;
+        }
     }
 
     loop {
@@ -41,8 +33,17 @@ pub async fn task_closure<'a, Fut: Future<Output = ()>, F: Fn(&'a Service) -> Fu
     }
 }
 
-pub async fn task(config: Config) {
-    task_closure(config, |service: &Service| async {
+/// Task to run the Type-C service, running the default event loop
+pub async fn task<'a, M, C, V, const N: usize>(
+    service: &'static Service<'a>,
+    wrappers: [&'a ControllerWrapper<'a, M, C, V>; N],
+) where
+    M: embassy_sync::blocking_mutex::raw::RawMutex,
+    C: embedded_services::sync::Lockable,
+    V: crate::wrapper::FwOfferValidator,
+    <C as embedded_services::sync::Lockable>::Inner: embedded_services::type_c::controller::Controller,
+{
+    task_closure(service, wrappers, |service: &Service| async {
         if let Err(e) = service.process_next_event().await {
             error!("Type-C service processing error: {:#?}", e);
         }

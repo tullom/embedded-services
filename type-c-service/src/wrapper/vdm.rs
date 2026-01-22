@@ -58,7 +58,9 @@ where
         pending
             .pend_port(global_port_id.0 as usize)
             .map_err(|_| PdError::InvalidPort)?;
-        self.registration.pd_controller.notify_ports(pending);
+        self.registration
+            .pd_controller
+            .notify_ports(self.registration.context, pending);
         Ok(())
     }
 }
