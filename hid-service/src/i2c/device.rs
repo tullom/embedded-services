@@ -123,8 +123,7 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
             })))?;
 
         let mut bus = self.bus.lock().await;
-        let reg = desc.w_input_register.to_le_bytes();
-        if let Err(e) = bus.write_read(self.address, &reg, buf).await {
+        if let Err(e) = bus.read(self.address, buf).await {
             error!("Failed to read input report");
             return Err(Error::Bus(e));
         }
