@@ -266,6 +266,7 @@ impl PowerPolicy {
         } else {
             // Notify disconnect if recently detached consumer was previously attached.
             if let Some(consumer_state) = state.current_consumer_state {
+                self.disconnect_chargers().await?;
                 self.comms_notify(CommsMessage {
                     data: CommsData::ConsumerDisconnected(consumer_state.device_id),
                 })
