@@ -204,9 +204,9 @@ dependencies = [
 
 [[package]]
 name = "bitfield-struct"
-version = "0.10.1"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2be5a46ba01b60005ae2c51a36a29cfe134bcacae2dd5cedcd4615fbaad1494b"
+checksum = "8769c4854c5ada2852ddf6fd09d15cf43d4c2aaeccb4de6432f5402f08a6003b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -579,9 +579,9 @@ dependencies = [
 
 [[package]]
 name = "embedded-batteries"
-version = "0.2.1"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31e14d288a59ef41f4e05468eae9b1c9fef6866977cea86d3f1a1ced295b6cab"
+checksum = "40f975432b4e146342a1589c563cffab6b7a692024cb511bf87b6bfe78c84125"
 dependencies = [
  "bitfield-struct",
  "bitflags 2.9.4",
@@ -591,9 +591,9 @@ dependencies = [
 
 [[package]]
 name = "embedded-batteries-async"
-version = "0.2.1"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98cb543f4eea7e2c57544f345a5cf40fd90e9d3593b96cb7515f6c1d62c7fc68"
+checksum = "a3bf0e4be67770cfc31f1cea8b73baf98c0baf2c57d6bd8c3a4c315acb1d8bd4"
 dependencies = [
  "bitfield-struct",
  "embedded-batteries",

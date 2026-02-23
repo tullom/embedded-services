@@ -17,7 +17,7 @@ use embedded_services::{error, info};
 use battery_service::controller::{Controller, ControllerEvent};
 use battery_service::device::{Device, DeviceId, DynamicBatteryMsgs, StaticBatteryMsgs};
 use battery_service::wrapper::Wrapper;
-use bq40z50_rx::Bq40z50;
+use bq40z50_rx::Bq40z50R5 as Bq40z50;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_imxrt::bind_interrupts;
@@ -44,11 +44,12 @@ static FG_DEVICE: StaticCell<Device> = StaticCell::new();
 struct Bq40z50Controller {
     driver: Bq40z50<
         I2cDevice<'static, NoopRawMutex, embassy_imxrt::i2c::master::I2cMaster<'static, embassy_imxrt::i2c::Async>>,
+        embassy_time::Delay,
     >,
 }
 
 impl embedded_batteries_async::smart_battery::ErrorType for Bq40z50Controller {
-    type Error = <Bq40z50<I2cDevice<'static, NoopRawMutex, I2cMaster<'static, Async>>> as embedded_batteries_async::smart_battery::ErrorType>::Error;
+    type Error = <Bq40z50<I2cDevice<'static, NoopRawMutex, I2cMaster<'static, Async>>, embassy_time::Delay,> as embedded_batteries_async::smart_battery::ErrorType>::Error;
 }
 
 impl embedded_batteries_async::smart_battery::SmartBattery for Bq40z50Controller {
@@ -160,7 +161,7 @@ impl embedded_batteries_async::smart_battery::SmartBattery for Bq40z50Controller
 }
 
 impl Controller for Bq40z50Controller {
-    type ControllerError = <Bq40z50<I2cDevice<'static, NoopRawMutex, I2cMaster<'static, Async>>> as embedded_batteries_async::smart_battery::ErrorType>::Error;
+    type ControllerError = <Bq40z50<I2cDevice<'static, NoopRawMutex, I2cMaster<'static, Async>>, embassy_time::Delay,> as embedded_batteries_async::smart_battery::ErrorType>::Error;
 
     async fn initialize(&mut self) -> Result<(), Self::ControllerError> {
         info!("Fuel gauge inited!");
@@ -327,7 +328,7 @@ async fn main(spawner: Spawner) {
     let wrap = Wrapper::new(
         fg,
         Bq40z50Controller {
-            driver: Bq40z50::new(fg_bus),
+            driver: Bq40z50::new(fg_bus, embassy_time::Delay),
         },
     );
 

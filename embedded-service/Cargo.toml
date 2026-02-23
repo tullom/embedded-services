@@ -58,6 +58,7 @@ defmt = [
     "embassy-time/defmt",
     "embedded-usb-pd/defmt",
     "embedded-cfu-protocol/defmt",
+    "embedded-batteries-async/defmt",
     "mctp-rs/defmt",
 ]
 log = [
