@@ -8,8 +8,6 @@ use crate::{
     power::{self, policy::ConsumerPowerCapability},
 };
 
-use super::PowerCapability;
-
 /// Charger controller trait that device drivers may use to integrate with internal messaging system
 pub trait ChargeController: embedded_batteries_async::charger::Charger {
     /// Type of error returned by the bus
@@ -153,7 +151,7 @@ pub struct InternalState {
     /// Charger device state
     pub state: State,
     /// Current charger capability
-    pub capability: Option<PowerCapability>,
+    pub capability: Option<ConsumerPowerCapability>,
 }
 
 /// Channel size for device requests
