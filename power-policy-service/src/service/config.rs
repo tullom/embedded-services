@@ -1,6 +1,6 @@
 //! Configuration types for the power policy service
 
-use embedded_services::power::policy::PowerCapability;
+use power_policy_interface::capability::PowerCapability;
 
 #[derive(Clone, Copy)]
 pub struct Config {

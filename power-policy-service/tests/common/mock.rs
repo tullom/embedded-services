@@ -1,10 +1,10 @@
 #![allow(clippy::unwrap_used)]
 use embassy_sync::signal::Signal;
-use embedded_services::power::policy::device::{DeviceTrait, InternalState};
-use embedded_services::power::policy::flags::Consumer;
-use embedded_services::power::policy::policy::RequestData;
-use embedded_services::power::policy::{ConsumerPowerCapability, Error, PowerCapability, ProviderPowerCapability};
 use embedded_services::{GlobalRawMutex, event, info};
+use power_policy_interface::{
+    capability::{ConsumerFlags, ConsumerPowerCapability, PowerCapability, ProviderPowerCapability},
+    psu::{Error, InternalState, Psu, event::RequestData},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -47,7 +47,7 @@ impl<'a, S: event::Sender<RequestData>> Mock<'a, S> {
 
         let capability = Some(ConsumerPowerCapability {
             capability,
-            flags: Consumer::none(),
+            flags: ConsumerFlags::none(),
         });
         self.state.update_consumer_power_capability(capability).unwrap();
         self.sender
@@ -61,7 +61,7 @@ impl<'a, S: event::Sender<RequestData>> Mock<'a, S> {
     }
 }
 
-impl<'a, S: event::Sender<RequestData>> DeviceTrait for Mock<'a, S> {
+impl<'a, S: event::Sender<RequestData>> Psu for Mock<'a, S> {
     async fn connect_consumer(&mut self, capability: ConsumerPowerCapability) -> Result<(), Error> {
         info!("Connect consumer {:#?}", capability);
         self.record_fn_call(FnCall::ConnectConsumer(capability));

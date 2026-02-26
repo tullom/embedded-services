@@ -1,12 +1,43 @@
 //! Device struct and methods
 use embassy_sync::mutex::Mutex;
 
-use super::{DeviceId, Error};
-use crate::event::Receiver;
-use crate::power::policy::policy::RequestData;
-use crate::power::policy::{ConsumerPowerCapability, ProviderPowerCapability};
-use crate::sync::Lockable;
-use crate::{GlobalRawMutex, intrusive_list};
+use crate::capability::{ConsumerPowerCapability, PowerCapability, ProviderPowerCapability};
+use embedded_services::event::Receiver;
+use embedded_services::sync::Lockable;
+use embedded_services::{GlobalRawMutex, intrusive_list};
+
+pub mod event;
+
+/// Error type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Error {
+    /// The requested device does not exist
+    InvalidDevice,
+    /// The provide request was denied, contains maximum available power
+    CannotProvide(Option<PowerCapability>),
+    /// The consume request was denied, contains maximum available power
+    CannotConsume(Option<PowerCapability>),
+    /// The device is not in the correct state (expected, actual)
+    InvalidState(&'static [StateKind], StateKind),
+    /// Invalid response
+    InvalidResponse,
+    /// Busy, the device cannot respond to the request at this time
+    Busy,
+    /// Timeout
+    Timeout,
+    /// Bus error
+    Bus,
+    /// Charger specific error, underlying error should have more context
+    Charger(crate::charger::ChargerError),
+    /// Generic failure
+    Failed,
+}
+
+/// Device ID new type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct DeviceId(pub u8);
 
 /// Most basic device states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,7 +285,7 @@ pub struct Response {
 }
 
 /// Trait for PSU devices
-pub trait DeviceTrait {
+pub trait Psu {
     /// Disconnect power from this device
     fn disconnect(&mut self) -> impl Future<Output = Result<(), Error>>;
     /// Connect this device to provide power to an external connection
@@ -264,9 +295,9 @@ pub trait DeviceTrait {
 }
 
 /// PSU registration struct
-pub struct Device<'a, D: Lockable, R: Receiver<RequestData>>
+pub struct RegistrationEntry<'a, D: Lockable, R: Receiver<event::RequestData>>
 where
-    D::Inner: DeviceTrait,
+    D::Inner: Psu,
 {
     /// Intrusive list node
     node: intrusive_list::Node,
@@ -280,9 +311,9 @@ where
     pub receiver: Mutex<GlobalRawMutex, R>,
 }
 
-impl<'a, D: Lockable, R: Receiver<RequestData>> Device<'a, D, R>
+impl<'a, D: Lockable, R: Receiver<event::RequestData>> RegistrationEntry<'a, D, R>
 where
-    D::Inner: DeviceTrait,
+    D::Inner: Psu,
 {
     /// Create a new device
     pub fn new(id: DeviceId, device: &'a D, receiver: R) -> Self {
@@ -333,29 +364,30 @@ where
     }
 }
 
-impl<D: Lockable, R: Receiver<RequestData> + 'static> intrusive_list::NodeContainer for Device<'static, D, R>
+impl<D: Lockable, R: Receiver<event::RequestData> + 'static> intrusive_list::NodeContainer
+    for RegistrationEntry<'static, D, R>
 where
-    D::Inner: DeviceTrait,
+    D::Inner: Psu,
 {
-    fn get_node(&self) -> &crate::Node {
+    fn get_node(&self) -> &intrusive_list::Node {
         &self.node
     }
 }
 
 /// Trait for any container that holds a device
-pub trait DeviceContainer<D: Lockable, R: Receiver<RequestData>>
+pub trait PsuContainer<D: Lockable, R: Receiver<event::RequestData>>
 where
-    D::Inner: DeviceTrait,
+    D::Inner: Psu,
 {
     /// Get the underlying device struct
-    fn get_power_policy_device(&self) -> &Device<'_, D, R>;
+    fn get_power_policy_device(&self) -> &RegistrationEntry<'_, D, R>;
 }
 
-impl<D: Lockable, R: Receiver<RequestData>> DeviceContainer<D, R> for Device<'_, D, R>
+impl<D: Lockable, R: Receiver<event::RequestData>> PsuContainer<D, R> for RegistrationEntry<'_, D, R>
 where
-    D::Inner: DeviceTrait,
+    D::Inner: Psu,
 {
-    fn get_power_policy_device(&self) -> &Device<'_, D, R> {
+    fn get_power_policy_device(&self) -> &RegistrationEntry<'_, D, R> {
         self
     }
 }

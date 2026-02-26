@@ -166,6 +166,7 @@ dependencies = [
  "heapless",
  "log",
  "mctp-rs",
+ "power-policy-interface",
  "zerocopy",
 ]
 
@@ -796,7 +797,6 @@ dependencies = [
  "embassy-futures",
  "embassy-sync",
  "embassy-time",
- "embedded-batteries-async",
  "embedded-cfu-protocol",
  "embedded-hal-async",
  "embedded-io",
@@ -1385,15 +1385,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "power-policy-service"
+name = "power-policy-interface"
 version = "0.1.0"
 dependencies = [
+ "bitfield 0.17.0",
  "embassy-futures",
  "embassy-sync",
- "embassy-time",
+ "embedded-batteries-async",
  "embedded-services",
  "heapless",
  "log",
+ "num_enum",
+]
+
+[[package]]
+name = "power-policy-service"
+version = "0.1.0"
+dependencies = [
+ "bitfield 0.17.0",
+ "embassy-futures",
+ "embassy-sync",
+ "embassy-time",
+ "embedded-batteries-async",
+ "embedded-services",
+ "heapless",
+ "log",
+ "num_enum",
+ "power-policy-interface",
 ]
 
 [[package]]
@@ -1649,6 +1667,7 @@ dependencies = [
  "env_logger",
  "heapless",
  "log",
+ "power-policy-interface",
  "power-policy-service",
  "static_cell",
  "thermal-service",
@@ -1865,6 +1884,7 @@ version = "0.1.0"
 dependencies = [
  "bitfield 0.17.0",
  "bitflags 2.9.4",
+ "bitvec",
  "cfu-service",
  "embassy-futures",
  "embassy-sync",
@@ -1877,6 +1897,8 @@ dependencies = [
  "embedded-usb-pd",
  "heapless",
  "log",
+ "power-policy-interface",
+ "power-policy-service",
  "tps6699x",
 ]
 

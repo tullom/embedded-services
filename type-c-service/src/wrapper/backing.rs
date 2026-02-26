@@ -1,64 +1,6 @@
 //! Various types of state and objects required for [`crate::wrapper::ControllerWrapper`].
 //!
-//! The wrapper needs per-port state which ultimately needs to come from something like an array.
-//! We need to erase the generic `N` parameter from that storage so as not to monomorphize the entire
-//! wrapper over it. This module provides the necessary types and traits to do so. Things required by
-//! the wrapper can be split into two categories: objects used for service registration (which must be immutable),
-//! and mutable state. These are represented by the [`Registration`] and [`DynPortState`] respectively. The later
-//! is a trait intended to be used as a trait object to erase the generic port count.
-//!
-//! [`Storage`] is the base storage type and is generic over the number of ports. However, there are additional
-//! objects that need to reference the storage. To avoid a self-referential
-//! struct, [`ReferencedStorage`] contains these. This struct is still generic over the number of ports.
-//!
-//! Lastly, [`Backing`] contains references to the registration and type-erased state and is what is passed
-//! to the wrapper.
-//!
-//! Example usage:
-//! ```
-//! use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-//! use static_cell::StaticCell;
-//! use embedded_services::type_c::ControllerId;
-//! use embedded_services::power;
-//! use embedded_usb_pd::GlobalPortId;
-//! use type_c_service::wrapper::backing::{Storage, IntermediateStorage, ReferencedStorage};
-//! use embassy_sync::channel::{Channel, DynamicReceiver, DynamicSender};
-//! use embedded_services::power::policy::policy;
-//!
-//! fn init(context: &'static embedded_services::type_c::controller::Context) {
-//!    static STORAGE: StaticCell<Storage<1, NoopRawMutex>> = StaticCell::new();
-//!    let storage = STORAGE.init(Storage::new(
-//!        context,
-//!        ControllerId(0),
-//!        0x0, // CFU component ID (unused)
-//!        [GlobalPortId(0)],
-//!    ));
-//!
-//!    static INTERMEDIATE: StaticCell<type_c_service::wrapper::backing::IntermediateStorage<1, NoopRawMutex>> =
-//!        StaticCell::new();
-//!    let intermediate = INTERMEDIATE.init(storage.try_create_intermediate().expect("Failed to create intermediate storage"));
-//!
-//!    static POLICY_CHANNEL: StaticCell<Channel<NoopRawMutex, policy::RequestData, 1>> = StaticCell::new();
-//!    let policy_channel = POLICY_CHANNEL.init(Channel::new());
-//!
-//!    let policy_sender = policy_channel.dyn_sender();
-//!    let policy_receiver = policy_channel.dyn_receiver();
-//!
-//!    static REFERENCED: StaticCell<
-//!        type_c_service::wrapper::backing::ReferencedStorage<
-//!            1,
-//!            NoopRawMutex,
-//!            DynamicSender<'_, policy::RequestData>,
-//!            DynamicReceiver<'_, policy::RequestData>,
-//!        >,
-//!    > = StaticCell::new();
-//!    let referenced = REFERENCED.init(
-//!        intermediate
-//!            .try_create_referenced([(power::policy::DeviceId(0), policy_sender, policy_receiver)])
-//!            .expect("Failed to create referenced storage"),
-//!    );
-//! }
-//! ```
+//! TODO: Update as part of type-C refactoring
 use core::{
     array::from_fn,
     cell::{RefCell, RefMut},
@@ -72,19 +14,15 @@ use embassy_sync::{
 };
 use embassy_time::Instant;
 use embedded_cfu_protocol::protocol_definitions::ComponentId;
-use embedded_services::{
-    event,
-    power::{
-        self,
-        policy::{DeviceId, policy},
-    },
-    type_c::{
-        ControllerId,
-        controller::PortStatus,
-        event::{PortEvent, PortStatusChanged},
-    },
-};
+use embedded_services::event;
 use embedded_usb_pd::{GlobalPortId, ado::Ado};
+
+use crate::type_c::{
+    ControllerId,
+    controller::PortStatus,
+    event::{PortEvent, PortStatusChanged},
+};
+use power_policy_interface::psu::DeviceId;
 
 use crate::{
     PortEventStreamer,
@@ -129,13 +67,13 @@ impl Default for ControllerState {
 }
 
 /// Internal state containing all per-port and per-controller state
-struct InternalState<'a, const N: usize, S: event::Sender<policy::RequestData>> {
+struct InternalState<'a, const N: usize, S: event::Sender<power_policy_interface::psu::event::RequestData>> {
     controller_state: ControllerState,
     port_states: [PortState<'a>; N],
     port_power: [PortPower<S>; N],
 }
 
-impl<'a, const N: usize, S: event::Sender<policy::RequestData>> InternalState<'a, N, S> {
+impl<'a, const N: usize, S: event::Sender<power_policy_interface::psu::event::RequestData>> InternalState<'a, N, S> {
     fn try_new<M: RawMutex>(storage: &'a Storage<N, M>, power_events: [S; N]) -> Option<Self> {
         let port_states = storage.pd_alerts.each_ref().map(|pd_alert| {
             Some(PortState {
@@ -164,7 +102,9 @@ impl<'a, const N: usize, S: event::Sender<policy::RequestData>> InternalState<'a
     }
 }
 
-impl<'a, const N: usize, S: event::Sender<policy::RequestData>> DynPortState<'a, S> for InternalState<'a, N, S> {
+impl<'a, const N: usize, S: event::Sender<power_policy_interface::psu::event::RequestData>> DynPortState<'a, S>
+    for InternalState<'a, N, S>
+{
     fn num_ports(&self) -> usize {
         self.port_states.len()
     }
@@ -195,7 +135,7 @@ impl<'a, const N: usize, S: event::Sender<policy::RequestData>> DynPortState<'a,
 }
 
 /// Trait to erase the generic port count argument
-pub trait DynPortState<'a, S: event::Sender<policy::RequestData>> {
+pub trait DynPortState<'a, S: event::Sender<power_policy_interface::psu::event::RequestData>> {
     fn num_ports(&self) -> usize;
 
     fn port_states(&self) -> &[PortState<'a>];
@@ -209,14 +149,14 @@ pub trait DynPortState<'a, S: event::Sender<policy::RequestData>> {
 }
 
 /// Service registration objects
-pub struct Registration<'a, M: RawMutex, R: event::Receiver<policy::RequestData>> {
-    pub context: &'a embedded_services::type_c::controller::Context,
-    pub pd_controller: &'a embedded_services::type_c::controller::Device<'a>,
+pub struct Registration<'a, M: RawMutex, R: event::Receiver<power_policy_interface::psu::event::RequestData>> {
+    pub context: &'a crate::type_c::controller::Context,
+    pub pd_controller: &'a crate::type_c::controller::Device<'a>,
     pub cfu_device: &'a CfuDevice,
-    pub power_devices: &'a [embedded_services::power::policy::device::Device<'a, Mutex<M, PowerProxyDevice<'a>>, R>],
+    pub power_devices: &'a [power_policy_interface::psu::RegistrationEntry<'a, Mutex<M, PowerProxyDevice<'a>>, R>],
 }
 
-impl<'a, M: RawMutex, R: event::Receiver<policy::RequestData>> Registration<'a, M, R> {
+impl<'a, M: RawMutex, R: event::Receiver<power_policy_interface::psu::event::RequestData>> Registration<'a, M, R> {
     pub fn num_ports(&self) -> usize {
         self.power_devices.len()
     }
@@ -225,15 +165,15 @@ impl<'a, M: RawMutex, R: event::Receiver<policy::RequestData>> Registration<'a, 
 /// PD alerts should be fairly uncommon, four seems like a reasonable number to start with.
 const MAX_BUFFERED_PD_ALERTS: usize = 4;
 
-pub struct PortPower<S: event::Sender<policy::RequestData>> {
+pub struct PortPower<S: event::Sender<power_policy_interface::psu::event::RequestData>> {
     pub sender: S,
-    pub state: power::policy::device::InternalState,
+    pub state: power_policy_interface::psu::InternalState,
 }
 
 /// Base storage
 pub struct Storage<'a, const N: usize, M: RawMutex> {
     // Registration-related
-    context: &'a embedded_services::type_c::controller::Context,
+    context: &'a crate::type_c::controller::Context,
     controller_id: ControllerId,
     pd_ports: [GlobalPortId; N],
     cfu_device: CfuDevice,
@@ -245,7 +185,7 @@ pub struct Storage<'a, const N: usize, M: RawMutex> {
 
 impl<'a, const N: usize, M: RawMutex> Storage<'a, N, M> {
     pub fn new(
-        context: &'a embedded_services::type_c::controller::Context,
+        context: &'a crate::type_c::controller::Context,
         controller_id: ControllerId,
         cfu_id: ComponentId,
         pd_ports: [GlobalPortId; N],
@@ -295,7 +235,11 @@ impl<'a, const N: usize, M: RawMutex> IntermediateStorage<'a, N, M> {
     }
 
     /// Create referenced storage from this intermediate storage
-    pub fn try_create_referenced<'b, S: event::Sender<policy::RequestData>, R: event::Receiver<policy::RequestData>>(
+    pub fn try_create_referenced<
+        'b,
+        S: event::Sender<power_policy_interface::psu::event::RequestData>,
+        R: event::Receiver<power_policy_interface::psu::event::RequestData>,
+    >(
         &'b self,
         policy_args: [(DeviceId, S, R); N],
     ) -> Option<ReferencedStorage<'b, N, M, S, R>>
@@ -314,17 +258,22 @@ pub struct ReferencedStorage<
     'a,
     const N: usize,
     M: RawMutex,
-    S: event::Sender<policy::RequestData>,
-    R: event::Receiver<policy::RequestData>,
+    S: event::Sender<power_policy_interface::psu::event::RequestData>,
+    R: event::Receiver<power_policy_interface::psu::event::RequestData>,
 > {
     intermediate: &'a IntermediateStorage<'a, N, M>,
     state: RefCell<InternalState<'a, N, S>>,
-    pd_controller: embedded_services::type_c::controller::Device<'a>,
-    power_devices: [embedded_services::power::policy::device::Device<'a, Mutex<M, PowerProxyDevice<'a>>, R>; N],
+    pd_controller: crate::type_c::controller::Device<'a>,
+    power_devices: [power_policy_interface::psu::RegistrationEntry<'a, Mutex<M, PowerProxyDevice<'a>>, R>; N],
 }
 
-impl<'a, const N: usize, M: RawMutex, S: event::Sender<policy::RequestData>, R: event::Receiver<policy::RequestData>>
-    ReferencedStorage<'a, N, M, S, R>
+impl<
+    'a,
+    const N: usize,
+    M: RawMutex,
+    S: event::Sender<power_policy_interface::psu::event::RequestData>,
+    R: event::Receiver<power_policy_interface::psu::event::RequestData>,
+> ReferencedStorage<'a, N, M, S, R>
 {
     /// Create a new referenced storage from the given intermediate storage
     fn try_from_intermediate(
@@ -337,7 +286,7 @@ impl<'a, const N: usize, M: RawMutex, S: event::Sender<policy::RequestData>, R: 
         for (i, (device_id, policy_sender, policy_receiver)) in policy_args.into_iter().enumerate() {
             power_senders.push(policy_sender).ok()?;
             power_devices
-                .push(embedded_services::power::policy::device::Device::new(
+                .push(power_policy_interface::psu::RegistrationEntry::new(
                     device_id,
                     intermediate.power_proxy_devices.get(i)?,
                     policy_receiver,
@@ -352,7 +301,7 @@ impl<'a, const N: usize, M: RawMutex, S: event::Sender<policy::RequestData>, R: 
                 // Safe because both have N elements
                 power_senders.into_array().ok()?,
             )?),
-            pd_controller: embedded_services::type_c::controller::Device::new(
+            pd_controller: crate::type_c::controller::Device::new(
                 intermediate.storage.controller_id,
                 intermediate.storage.pd_ports.as_slice(),
             ),
@@ -379,7 +328,12 @@ impl<'a, const N: usize, M: RawMutex, S: event::Sender<policy::RequestData>, R: 
 }
 
 /// Wrapper around registration and type-erased state
-pub struct Backing<'a, M: RawMutex, S: event::Sender<policy::RequestData>, R: event::Receiver<policy::RequestData>> {
+pub struct Backing<
+    'a,
+    M: RawMutex,
+    S: event::Sender<power_policy_interface::psu::event::RequestData>,
+    R: event::Receiver<power_policy_interface::psu::event::RequestData>,
+> {
     pub(crate) registration: Registration<'a, M, R>,
     pub(crate) state: RefMut<'a, dyn DynPortState<'a, S>>,
     pub(crate) power_receivers: &'a [Mutex<M, PowerProxyReceiver<'a>>],

@@ -9,11 +9,12 @@ use embassy_sync::{
     signal::Signal,
 };
 use embassy_time::{Duration, with_timeout};
-use embedded_services::{
-    GlobalRawMutex,
-    power::policy::{self, DeviceId, PowerCapability, device, policy::RequestData},
-};
-use power_policy_service::PowerPolicy;
+use embedded_services::GlobalRawMutex;
+use power_policy_interface::capability::PowerCapability;
+use power_policy_interface::psu;
+use power_policy_interface::psu::DeviceId;
+use power_policy_interface::psu::event::RequestData;
+use power_policy_service::service::Service;
 
 pub mod mock;
 
@@ -39,7 +40,7 @@ const EVENT_CHANNEL_SIZE: usize = 4;
 
 async fn power_policy_task(
     completion_signal: &'static Signal<GlobalRawMutex, ()>,
-    power_policy: &'static PowerPolicy<
+    power_policy: &'static Service<
         'static,
         Mutex<GlobalRawMutex, Mock<'static, DynamicSender<'static, RequestData>>>,
         DynamicReceiver<'static, RequestData>,
@@ -50,19 +51,19 @@ async fn power_policy_task(
     }
 }
 
-pub type RegistrationType = device::Device<
+pub type RegistrationType = psu::RegistrationEntry<
     'static,
     Mutex<GlobalRawMutex, Mock<'static, DynamicSender<'static, RequestData>>>,
     DynamicReceiver<'static, RequestData>,
 >;
 
-pub type ServiceType = PowerPolicy<
+pub type ServiceType = Service<
     'static,
     Mutex<GlobalRawMutex, Mock<'static, DynamicSender<'static, RequestData>>>,
     DynamicReceiver<'static, RequestData>,
 >;
 
-pub type ServiceContext = policy::policy::Context<
+pub type ServiceContext = power_policy_service::service::context::Context<
     Mutex<GlobalRawMutex, Mock<'static, DynamicSender<'static, RequestData>>>,
     DynamicReceiver<'static, RequestData>,
 >;
@@ -91,7 +92,8 @@ pub async fn run_test<F: Future<Output = ()>>(
     let device0 = DEVICE0.init(Mutex::new(Mock::new(device0_sender, device0_signal)));
 
     static DEVICE0_REGISTRATION: StaticCell<RegistrationType> = StaticCell::new();
-    let device0_registration = DEVICE0_REGISTRATION.init(device::Device::new(DeviceId(0), device0, device0_receiver));
+    let device0_registration =
+        DEVICE0_REGISTRATION.init(psu::RegistrationEntry::new(DeviceId(0), device0, device0_receiver));
 
     static DEVICE1_EVENT_CHANNEL: StaticCell<Channel<GlobalRawMutex, RequestData, EVENT_CHANNEL_SIZE>> =
         StaticCell::new();
@@ -105,16 +107,17 @@ pub async fn run_test<F: Future<Output = ()>>(
     let device1 = DEVICE1.init(Mutex::new(Mock::new(device1_sender, device1_signal)));
 
     static DEVICE1_REGISTRATION: StaticCell<RegistrationType> = StaticCell::new();
-    let device1_registration = DEVICE1_REGISTRATION.init(device::Device::new(DeviceId(1), device1, device1_receiver));
+    let device1_registration =
+        DEVICE1_REGISTRATION.init(psu::RegistrationEntry::new(DeviceId(1), device1, device1_receiver));
 
     static SERVICE_CONTEXT: StaticCell<ServiceContext> = StaticCell::new();
-    let service_context = SERVICE_CONTEXT.init(policy::policy::Context::new());
+    let service_context = SERVICE_CONTEXT.init(power_policy_service::service::context::Context::new());
 
-    service_context.register_device(device0_registration).unwrap();
-    service_context.register_device(device1_registration).unwrap();
+    service_context.register_psu(device0_registration).unwrap();
+    service_context.register_psu(device1_registration).unwrap();
 
     static POWER_POLICY: StaticCell<ServiceType> = StaticCell::new();
-    let power_policy = POWER_POLICY.init(power_policy_service::PowerPolicy::new(
+    let power_policy = POWER_POLICY.init(power_policy_service::service::Service::new(
         service_context,
         Default::default(),
     ));

@@ -126,7 +126,10 @@ impl comms::MailboxDelegate for Service {
             self.context.send_event_no_wait(*event).map_err(|e| match e {
                 embassy_sync::channel::TrySendError::Full(_) => comms::MailboxDelegateError::BufferFull,
             })?
-        } else if let Some(power_policy_msg) = message.data.get::<embedded_services::power::policy::CommsMessage>() {
+        } else if let Some(power_policy_msg) = message
+            .data
+            .get::<power_policy_interface::service::event::CommsMessage>()
+        {
             self.context.set_power_info(&power_policy_msg.data)?;
         }
 

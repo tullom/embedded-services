@@ -1,11 +1,9 @@
 //! CFU message bridge
 //! TODO: remove this once we have a more generic FW update implementation
+use crate::type_c::controller::Controller;
 use cfu_service::component::{InternalResponseData, RequestData};
 use embassy_futures::select::{Either, select};
 use embedded_cfu_protocol::protocol_definitions::*;
-use embedded_services::power;
-use embedded_services::power::policy::policy;
-use embedded_services::type_c::controller::Controller;
 use embedded_services::{debug, error};
 
 use super::message::EventCfu;
@@ -34,8 +32,8 @@ impl<
     'device,
     M: RawMutex,
     D: Lockable,
-    S: event::Sender<policy::RequestData>,
-    R: event::Receiver<policy::RequestData>,
+    S: event::Sender<power_policy_interface::psu::event::RequestData>,
+    R: event::Receiver<power_policy_interface::psu::event::RequestData>,
     V: FwOfferValidator,
 > ControllerWrapper<'device, M, D, S, R, V>
 where
@@ -151,9 +149,12 @@ where
             let controller_id = self.registration.pd_controller.id();
             for power in state.port_power_mut() {
                 info!("Controller{}: checking power device", controller_id.0);
-                if power.state.state() != power::policy::device::State::Detached {
+                if power.state.state() != power_policy_interface::psu::State::Detached {
                     info!("Controller{}: Detaching power device", controller_id.0);
-                    power.sender.send(policy::RequestData::Detached).await;
+                    power
+                        .sender
+                        .send(power_policy_interface::psu::event::RequestData::Detached)
+                        .await;
                 }
             }
 
