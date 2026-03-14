@@ -45,76 +45,83 @@ The `examples/` directory contains separate workspaces (excluded from the root w
 ```shell
 # ARM board examples
 cd examples/rt685s-evk && cargo clippy --target thumbv8m.main-none-eabihf --locked
+cd examples/rt633 && cargo clippy --target thumbv8m.main-none-eabihf --locked
 # Std examples
 cd examples/std && cargo clippy --locked
 ```
 
 ## Architecture
 
+> **Note:** The `v0.2.0` branch is the target for new development and
+> contains the latest service patterns. Some services on `main` still
+> use older patterns (e.g., `comms::Endpoint`, `MailboxDelegate`,
+> `OnceLock` singletons) that are being phased out. When adding or
+> modifying services, follow the patterns described below and on
+> `v0.2.0`. See also [`docs/api-guidelines.md`](../docs/api-guidelines.md)
+> for detailed rationale.
+
 ### Service Pattern
 
-Each service crate follows a consistent structure:
+Services implement the `odp_service_common::runnable_service::Service<'hw>` trait, which enforces a consistent structure:
 
-1. **Service struct** with a `comms::Endpoint` and domain-specific context/state
-2. **`MailboxDelegate` impl** — the `receive()` method handles incoming messages using type-safe downcasting via `message.data.get::<T>()`
-3. **Global singleton** — services are stored in `OnceLock<Service>` statics
-4. **Async task function** — registers the endpoint, then loops calling a `process()` or `process_next()` method
-5. **Spawned via Embassy** — `#[embassy_executor::task]` functions are spawned from main
+1. **`Resources`** — caller-allocated state (stored in a `StaticCell`), not an internal `OnceLock` singleton
+2. **`new(resources, params) -> (Self, Runner)`** — constructor returns a control handle and a `Runner`
+3. **`Runner`** — implements `ServiceRunner` with a single `run(self) -> !` method that drives the service's async event loop
+4. **`spawn_service!`** macro — handles boilerplate: allocates `Resources` in a `StaticCell`, calls `new()`, spawns the `Runner` on an Embassy executor
 
 ```rust
-// Typical service skeleton
-pub struct MyService {
-    endpoint: comms::Endpoint,
-    // ... domain state
+// Typical service using the Service trait
+#[derive(Default)]
+pub struct Resources<'hw> {
+    inner: Option<ServiceInner<'hw>>,
 }
 
-impl comms::MailboxDelegate for MyService {
-    fn receive(&self, message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
-        if let Some(event) = message.data.get::<MyEvent>() {
-            // handle event
-        }
-        Ok(())
-    }
-}
+pub struct MyService<'hw> { /* control handle */ }
+pub struct Runner<'hw> { /* holds refs into Resources */ }
 
-static SERVICE: OnceLock<MyService> = OnceLock::new();
+impl<'hw> Service<'hw> for MyService<'hw> {
+    type Resources = Resources<'hw>;
+    type Runner = Runner<'hw>;
+    type InitParams = MyInitParams<'hw>;
+    type ErrorType = MyError;
 
-pub async fn task() {
-    let service = SERVICE.get_or_init(MyService::new);
-    comms::register_endpoint(service, &service.endpoint).await.unwrap();
-    loop {
-        service.process_next().await;
+    async fn new(
+        resources: &'hw mut Self::Resources,
+        params: Self::InitParams,
+    ) -> Result<(Self, Self::Runner), Self::ErrorType> {
+        // ...
     }
 }
 ```
 
+Key principles (from API guidelines):
+
+- **No `'static` references** — use generic `'hw` lifetimes for testability
+- **External memory allocation** — callers provide `Resources`, no internal `static OnceLock` singletons
+- **Trait-based public APIs** — runtime interfaces live in standalone `-interface` crates (e.g., `battery-service-interface`) for mockability and customizability
+
 ### Communication (IPC)
 
-Services communicate through `embedded_services::comms` — a type-erased message routing system built on intrusive linked lists (zero allocation):
+Services use a variety of async IPC mechanisms from `embassy-sync` and `embedded_services`:
 
-- **EndpointID**: `Internal(Battery | Thermal | ...)` or `External(Host | Debug | ...)`
-- **Messages**: use `&dyn Any` for payload, receivers downcast with `message.data.get::<T>()`
-- Services call `embedded_services::init()` before registering endpoints
-- Each `EndpointID` has its own static intrusive list of registered endpoints
+- **`embassy_sync::channel::Channel`** — bounded async MPSC channels for command/response flows
+- **`embassy_sync::signal::Signal`** — single-value async notifications
+- **`embedded_services::ipc::deferred`** — request/response channels where the caller awaits a reply
+- **`embedded_services::broadcaster`** — publish/subscribe pattern for event fan-out
+- **`embedded_services::relay`** — relay service pattern for MCTP-based request/response dispatch with direct async calls
 
 ### Composition
 
-At the top level, an EC is composed by spawning service tasks on an Embassy executor:
+At the top level, an EC is composed by spawning service tasks on an Embassy executor, using the `spawn_service!` macro:
 
 ```rust
-embedded_services::init().await;
-spawner.must_spawn(battery_service_task());
-spawner.must_spawn(thermal_service_task());
-spawner.must_spawn(power_policy_task(config));
+let my_service = spawn_service!(spawner, MyService, my_init_params)?;
 ```
 
 ### Core Utilities (embedded-service crate)
 
-- **`GlobalRawMutex`**: `ThreadModeRawMutex` on ARM bare-metal, `CriticalSectionRawMutex` in tests/std
+- **`GlobalRawMutex`**: `ThreadModeRawMutex` on ARM bare-metal, `CriticalSectionRawMutex` on RISC-V bare-metal and in tests/std
 - **`SyncCell<T>`**: `ThreadModeCell` on ARM, `CriticalSectionCell` elsewhere — interior mutability for embedded
-- **`define_static_buffer!`**: macro for creating static buffers with borrow-checked `OwnedRef`/`SharedRef` access
-- **`intrusive_list`**: no-alloc linked list using embedded `Node` fields for endpoint routing
-- **`Never`**: type alias for `core::convert::Infallible` used in `Result<Never, Error>` for tasks that shouldn't return
 
 ## Key Conventions
 
@@ -129,8 +136,8 @@ These must never be enabled simultaneously in production. Use the unified macros
 
 ### Error Handling
 
-- Custom `enum` error types per module — no `thiserror` (it requires std)
-- All error enums derive `Debug, Clone, Copy, PartialEq, Eq`
+- Prefer custom `enum` error types per module — no `thiserror` (it requires std); some modules instead use lightweight struct error types when that is a better fit
+- Prefer deriving `Debug, Clone, Copy, PartialEq, Eq` on error enums when practical (some errors may only derive a subset, e.g., `Debug`/`Copy`)
 - Conditional defmt support: `#[cfg_attr(feature = "defmt", derive(defmt::Format))]`
 - Result type aliases per module (e.g., `pub type BatteryResponse = Result<ContextResponse, ContextError>`)
 
@@ -151,11 +158,21 @@ The workspace enforces strict clippy lints (in root `Cargo.toml`). Key denials:
 
 ### Testing
 
-- Async tests use `embassy_futures::block_on(async { ... })`
+- Async unit tests in `no_std`/Embassy-focused crates use `embassy_futures::block_on(async { ... })` to stay runtime-agnostic
+- Host-only async tests and integration tests may use `#[tokio::test]` in crates that depend on `tokio`
 - Dev-dependencies enable `std` features: `embassy-sync/std`, `embassy-time/std`, `critical-section/std`
-- `tokio` with `rt`, `macros`, `time` features for integration tests
+- `tokio` with `rt`, `macros`, `time` features is used to support `#[tokio::test]`-based host/integration tests
 - Tests are organized in `#[cfg(test)]` modules or dedicated `test/` subdirectories
 
 ### Formatting
 
 Max line width is 120 characters (`rustfmt.toml`).
+
+### Commit Messages
+
+Follow the [standard Git commit message conventions](https://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html):
+
+- Subject line: capitalized, 50 characters or less, imperative mood (e.g., "Fix bug" not "Fixed bug")
+- Separate subject from body with a blank line
+- Wrap body text at 72 characters
+- Use the body to explain *what* and *why*, not *how*
