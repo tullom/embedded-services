@@ -372,7 +372,8 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
                     port_status.dual_power = source_pdos[0].dual_role_power();
                     port_status.unconstrained_power = source_pdos[0].unconstrained_power();
                 }
-            } else if pd_status.is_source() {
+            } else if status.port_role() {
+                // port_role is true for source
                 // Implicit source contract
                 let current = TypecCurrent::try_from(port_control.typec_current()).map_err(Error::Pd)?;
                 debug!("Port{} type-C source current: {:#?}", port.0, current);
