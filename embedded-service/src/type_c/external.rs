@@ -1,4 +1,6 @@
 //! Message definitions for external type-C commands
+use core::num::NonZeroU8;
+
 use embedded_usb_pd::{GlobalPortId, LocalPortId, PdError, ucsi};
 
 use crate::type_c::{
@@ -91,6 +93,13 @@ pub enum PortCommandData {
     SetPdStateMachineConfig(PdStateMachineConfig),
     /// Set Type-C state-machine configuration
     SetTypeCStateMachineConfig(TypeCStateMachineState),
+    /// Execute electrical disconnect
+    ExecuteElectricalDisconnect {
+        /// The time, in seconds, after which the port should automatically reconnect.
+        ///
+        /// If [`None`], the port will not automatically reconnect.
+        reconnect_time_s: Option<NonZeroU8>,
+    },
 }
 
 /// Port-specific commands
@@ -349,6 +358,25 @@ pub async fn reconfigure_retimer(port: GlobalPortId) -> Result<(), PdError> {
 /// Execute a UCSI command
 pub async fn execute_ucsi_command(command: ucsi::GlobalCommand) -> UcsiResponse {
     execute_external_ucsi_command(command).await
+}
+
+/// Execute an electrical disconnect on the given port.
+///
+/// The `reconnect_time_s` parameter specifies the time, in seconds, after which the port should automatically reconnect.
+/// If [`None`], the port will not automatically reconnect.
+pub async fn execute_electrical_disconnect(
+    port: GlobalPortId,
+    reconnect_time_s: Option<NonZeroU8>,
+) -> Result<(), PdError> {
+    match execute_external_port_command(Command::Port(PortCommand {
+        port,
+        data: PortCommandData::ExecuteElectricalDisconnect { reconnect_time_s },
+    }))
+    .await?
+    {
+        PortResponseData::Complete => Ok(()),
+        _ => Err(PdError::InvalidResponse),
+    }
 }
 
 /// Send vdm to the given port
