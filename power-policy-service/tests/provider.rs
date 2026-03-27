@@ -9,7 +9,7 @@ use power_policy_interface::capability::ProviderPowerCapability;
 
 mod common;
 
-use common::LOW_POWER;
+use common::{LOW_POWER, ServiceMutex};
 use power_policy_interface::service::event::Event as ServiceEvent;
 
 use crate::common::DeviceType;
@@ -21,6 +21,7 @@ const PER_CALL_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Test the basic provider flow with a single device.
 async fn test_single<'a>(
+    _service: &ServiceMutex<'a, 'a>,
     service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
     device0: &DeviceType<'a>,
     device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
@@ -73,6 +74,7 @@ async fn test_single<'a>(
 
 /// Test provider flow involving multiple devices and upgrading a provider's power capability.
 async fn test_upgrade<'a>(
+    service: &ServiceMutex<'a, 'a>,
     service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
     device0: &DeviceType<'a>,
     device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
@@ -105,6 +107,8 @@ async fn test_upgrade<'a>(
             },
         )
         .await;
+
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 15000);
     }
 
     {
@@ -132,6 +136,8 @@ async fn test_upgrade<'a>(
             },
         )
         .await;
+
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 22500);
     }
 
     {
@@ -164,6 +170,8 @@ async fn test_upgrade<'a>(
             },
         )
         .await;
+
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 22500);
     }
 
     {
@@ -178,6 +186,7 @@ async fn test_upgrade<'a>(
         device0_signal.reset();
 
         assert_provider_disconnected(service_receiver, device0).await;
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 7500);
     }
 
     {
@@ -209,6 +218,7 @@ async fn test_upgrade<'a>(
             },
         )
         .await;
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 15000);
     }
 
     assert_no_event(service_receiver);
@@ -216,6 +226,7 @@ async fn test_upgrade<'a>(
 
 /// Test the provider disconnect flow
 async fn test_disconnect<'a>(
+    service: &ServiceMutex<'a, 'a>,
     service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
     device0: &DeviceType<'a>,
     device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
@@ -248,6 +259,7 @@ async fn test_disconnect<'a>(
             },
         )
         .await;
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 7500);
     }
     // Test disconnect
     {
@@ -261,6 +273,7 @@ async fn test_disconnect<'a>(
         device0_signal.reset();
 
         assert_provider_disconnected(service_receiver, device0).await;
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
     }
 
     assert_no_event(service_receiver);

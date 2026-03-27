@@ -56,13 +56,15 @@ pub type ServiceType<'device, 'sender> = Service<
     >,
 >;
 
+pub type ServiceMutex<'device, 'sender> = Mutex<GlobalRawMutex, ServiceType<'device, 'sender>>;
+
 async fn power_policy_task<'device, 'sender, const N: usize>(
     completion_signal: &'device Signal<GlobalRawMutex, ()>,
-    mut power_policy: ServiceType<'device, 'sender>,
+    power_policy: &ServiceMutex<'device, 'sender>,
     mut event_receivers: ArrayEventReceivers<'device, N, DeviceType<'device>, DynamicReceiver<'device, EventData>>,
 ) {
     while let Either::First(result) = select(event_receivers.wait_event(), completion_signal.wait()).await {
-        power_policy.process_psu_event(result).await.unwrap();
+        power_policy.lock().await.process_psu_event(result).await.unwrap();
     }
 }
 
@@ -71,6 +73,7 @@ async fn power_policy_task<'device, 'sender, const N: usize>(
 /// The trait we want to express for `run_test` is something like:
 /// ```
 /// for<'a> F: FnOnce(
+/// &'a ServiceMutex<'a, 'a>,
 /// &'a Mutex<GlobalRawMutex, Mock<'a, DynamicSender<'a, EventData>>>,
 /// &'a Signal<GlobalRawMutex, (usize, FnCall)>,
 /// &'a Mutex<GlobalRawMutex, Mock<'a, DynamicSender<'a, EventData>>>,
@@ -79,16 +82,16 @@ async fn power_policy_task<'device, 'sender, const N: usize>(
 /// ```
 /// However, `impl (Future<Output = ()> + 'a)` is not real syntax. This could be done with the unstable feature type_alias_impl_trait,
 /// but we use this helper trait so as to not require use of nightly.
-pub trait TestArgsFnOnce<'a, Arg0: 'a, Arg1: 'a, Arg2: 'a, Arg3: 'a, Arg4: 'a>:
-    FnOnce(Arg0, Arg1, Arg2, Arg3, Arg4) -> Self::Fut
+pub trait TestArgsFnOnce<'a, Arg0: 'a, Arg1: 'a, Arg2: 'a, Arg3: 'a, Arg4: 'a, Arg5: 'a>:
+    FnOnce(Arg0, Arg1, Arg2, Arg3, Arg4, Arg5) -> Self::Fut
 {
     type Fut: Future<Output = ()>;
 }
 
-impl<'a, Arg0: 'a, Arg1: 'a, Arg2: 'a, Arg3: 'a, Arg4: 'a, F, Fut> TestArgsFnOnce<'a, Arg0, Arg1, Arg2, Arg3, Arg4>
-    for F
+impl<'a, Arg0: 'a, Arg1: 'a, Arg2: 'a, Arg3: 'a, Arg4: 'a, Arg5: 'a, F, Fut>
+    TestArgsFnOnce<'a, Arg0, Arg1, Arg2, Arg3, Arg4, Arg5> for F
 where
-    F: FnOnce(Arg0, Arg1, Arg2, Arg3, Arg4) -> Fut,
+    F: FnOnce(Arg0, Arg1, Arg2, Arg3, Arg4, Arg5) -> Fut,
     Fut: Future<Output = ()>,
 {
     type Fut = Fut;
@@ -98,6 +101,7 @@ pub async fn run_test<F>(timeout: Duration, test: F)
 where
     for<'a> F: TestArgsFnOnce<
             'a,
+            &'a ServiceMutex<'a, 'a>,
             DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
             &'a DeviceType<'a>,
             &'a Signal<GlobalRawMutex, (usize, FnCall)>,
@@ -144,19 +148,30 @@ where
         service_senders: [service_event_channel.dyn_sender()],
     };
 
-    let power_policy =
-        power_policy_service::service::Service::new(power_policy_registration, &service_context, Default::default());
+    let power_policy = Mutex::new(power_policy_service::service::Service::new(
+        power_policy_registration,
+        &service_context,
+        Default::default(),
+    ));
 
     with_timeout(
         timeout,
         join(
             power_policy_task(
                 &completion_signal,
-                power_policy,
+                &power_policy,
                 ArrayEventReceivers::new([&device0, &device1], [device0_receiver, device1_receiver]),
             ),
             async {
-                test(service_receiver, &device0, &device0_signal, &device1, &device1_signal).await;
+                test(
+                    &power_policy,
+                    service_receiver,
+                    &device0,
+                    &device0_signal,
+                    &device1,
+                    &device1_signal,
+                )
+                .await;
                 completion_signal.signal(());
             },
         ),

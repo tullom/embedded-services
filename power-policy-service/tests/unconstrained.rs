@@ -13,17 +13,18 @@ use common::LOW_POWER;
 use power_policy_interface::service::UnconstrainedState;
 use power_policy_interface::service::event::Event as ServiceEvent;
 
-use crate::common::DeviceType;
 use crate::common::HIGH_POWER;
 use crate::common::{
     DEFAULT_TIMEOUT, assert_consumer_connected, assert_consumer_disconnected, assert_no_event, assert_unconstrained,
     mock::FnCall, run_test,
 };
+use crate::common::{DeviceType, ServiceMutex};
 
 const PER_CALL_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Test unconstrained consumer flow with multiple devices.
 async fn test_unconstrained<'a>(
+    _service: &ServiceMutex<'a, 'a>,
     service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
     device0: &DeviceType<'a>,
     device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,

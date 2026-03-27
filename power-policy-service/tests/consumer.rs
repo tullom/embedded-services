@@ -8,7 +8,7 @@ use power_policy_interface::capability::{ConsumerFlags, ConsumerPowerCapability}
 
 mod common;
 
-use common::LOW_POWER;
+use common::{LOW_POWER, ServiceMutex};
 use power_policy_interface::service::event::Event as ServiceEvent;
 
 use crate::common::DeviceType;
@@ -21,6 +21,7 @@ const PER_CALL_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Test the basic consumer flow with a single device.
 async fn test_single<'a>(
+    service: &ServiceMutex<'a, 'a>,
     service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
     device0: &DeviceType<'a>,
     device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
@@ -57,6 +58,9 @@ async fn test_single<'a>(
             },
         )
         .await;
+
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
     }
     // Test detach
     {
@@ -70,6 +74,8 @@ async fn test_single<'a>(
         device0_signal.reset();
 
         assert_consumer_disconnected(service_receiver, device0).await;
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
     }
 
     assert_no_event(service_receiver);
@@ -77,6 +83,7 @@ async fn test_single<'a>(
 
 /// Test swapping to a higher powered device.
 async fn test_swap_higher<'a>(
+    service: &ServiceMutex<'a, 'a>,
     service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
     device0: &DeviceType<'a>,
     device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
@@ -113,6 +120,9 @@ async fn test_swap_higher<'a>(
             },
         )
         .await;
+
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
     }
     // Device1 connection at high power
     {
@@ -152,6 +162,9 @@ async fn test_swap_higher<'a>(
             },
         )
         .await;
+
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
     }
     // Test detach device1, should reconnect device0
     {
@@ -187,6 +200,9 @@ async fn test_swap_higher<'a>(
             },
         )
         .await;
+
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
     }
 
     assert_no_event(service_receiver);
@@ -194,6 +210,7 @@ async fn test_swap_higher<'a>(
 
 /// Test a disconnect initiated by the current consumer.
 async fn test_disconnect<'a>(
+    service: &ServiceMutex<'a, 'a>,
     service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
     device0: &DeviceType<'a>,
     device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
@@ -230,6 +247,9 @@ async fn test_disconnect<'a>(
             },
         )
         .await;
+
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
     }
     // Device1 connection at high power
     {
@@ -269,6 +289,9 @@ async fn test_disconnect<'a>(
             },
         )
         .await;
+
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
     }
 
     // Test disconnect device1, should reconnect device0
@@ -305,6 +328,9 @@ async fn test_disconnect<'a>(
             },
         )
         .await;
+
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
     }
 
     assert_no_event(service_receiver);
