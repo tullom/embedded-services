@@ -73,8 +73,12 @@ impl<E: Clone> Receiver<E> for DynSubscriber<'_, E> {
 
     async fn wait_next(&mut self) -> E {
         loop {
-            if let WaitResult::Message(e) = self.next_message().await {
-                return e;
+            match self.next_message().await {
+                WaitResult::Message(e) => return e,
+                WaitResult::Lagged(e) => {
+                    error!("Subscriber lagged, skipping {} events", e);
+                    continue;
+                }
             }
         }
     }
