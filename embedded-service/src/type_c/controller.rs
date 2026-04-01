@@ -317,6 +317,8 @@ pub enum PortCommandData {
         /// If [`None`], the port will not automatically reconnect.
         reconnect_time_s: Option<NonZeroU8>,
     },
+    /// Set the system power state
+    SetSystemPowerState(SystemPowerState),
 }
 
 /// Port-specific commands
@@ -375,6 +377,25 @@ impl PortResponseData {
 
 /// Port-specific command response
 pub type PortResponse = Result<PortResponseData, PdError>;
+
+/// System power state for Sx App Config register.
+///
+/// Used to notify the PD controller of the current system power state,
+/// which triggers Application Configuration updates (e.g., crossbar reconfiguration).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SystemPowerState {
+    /// S0 - System fully running
+    S0,
+    /// S3 - Suspend to RAM
+    S3,
+    /// S4 - Hibernate
+    S4,
+    /// S5 - Soft off
+    S5,
+    /// S0ix - Modern standby / Connected standby
+    S0ix,
+}
 
 /// PD controller command-specific data
 #[derive(Copy, Clone, Debug)]
@@ -679,6 +700,16 @@ pub trait Controller {
         &mut self,
         port: LocalPortId,
         reconnect_time_s: Option<NonZeroU8>,
+    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
+
+    /// Set the system power state on the given port.
+    ///
+    /// This notifies the PD controller of the current system power state,
+    /// which triggers Application Configuration updates (e.g., crossbar reconfiguration).
+    fn set_power_state(
+        &mut self,
+        port: LocalPortId,
+        state: SystemPowerState,
     ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
 }
 
@@ -1233,6 +1264,20 @@ impl ContextToken {
     ) -> Result<(), PdError> {
         match self
             .send_port_command(port, PortCommandData::ExecuteElectricalDisconnect { reconnect_time_s })
+            .await?
+        {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Set the system power state on the given port.
+    ///
+    /// This notifies the PD controller of the current system power state,
+    /// which triggers Application Configuration updates (e.g., crossbar reconfiguration).
+    pub async fn set_power_state(&self, port: GlobalPortId, state: SystemPowerState) -> Result<(), PdError> {
+        match self
+            .send_port_command(port, PortCommandData::SetSystemPowerState(state))
             .await?
         {
             PortResponseData::Complete => Ok(()),

@@ -7,7 +7,7 @@ use embedded_services::{
     type_c::{
         controller::{
             AttnVdm, ControllerStatus, DpConfig, DpPinConfig, DpStatus, OtherVdm, PdStateMachineConfig, PortStatus,
-            RetimerFwUpdateState, SendVdm, TbtConfig, TypeCStateMachineState, UsbControlConfig,
+            RetimerFwUpdateState, SendVdm, SystemPowerState, TbtConfig, TypeCStateMachineState, UsbControlConfig,
         },
         event::PortEvent,
     },
@@ -329,6 +329,15 @@ impl embedded_services::type_c::controller::Controller for Controller<'_> {
         reconnect_time_s: Option<NonZeroU8>,
     ) -> Result<(), Error<Self::BusError>> {
         debug!("Execute electrical disconnect for port {port:?} with reconnect time {reconnect_time_s:?}");
+        Ok(())
+    }
+
+    async fn set_power_state(
+        &mut self,
+        port: LocalPortId,
+        state: SystemPowerState,
+    ) -> Result<(), Error<Self::BusError>> {
+        debug!("Set power state for port {port:?}: {state:?}");
         Ok(())
     }
 }

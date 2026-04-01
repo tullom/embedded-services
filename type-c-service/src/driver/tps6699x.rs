@@ -826,6 +826,24 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
             }
         }
     }
+
+    async fn set_power_state(
+        &mut self,
+        port: LocalPortId,
+        state: controller::SystemPowerState,
+    ) -> Result<(), Error<Self::BusError>> {
+        use tps6699x::registers::SystemPowerState as DriverSystemPowerState;
+
+        let driver_state = match state {
+            controller::SystemPowerState::S0 => DriverSystemPowerState::S0,
+            controller::SystemPowerState::S3 => DriverSystemPowerState::S3,
+            controller::SystemPowerState::S4 => DriverSystemPowerState::S4,
+            controller::SystemPowerState::S5 => DriverSystemPowerState::S5,
+            controller::SystemPowerState::S0ix => DriverSystemPowerState::S0Ix,
+        };
+
+        self.tps6699x.set_sx_app_config(port, driver_state).await
+    }
 }
 
 impl<'a, M: RawMutex, BUS: I2c> AsRef<tps6699x_drv::Tps6699x<'a, M, BUS>> for Tps6699x<'a, M, BUS> {
