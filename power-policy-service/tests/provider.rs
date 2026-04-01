@@ -281,15 +281,15 @@ async fn test_disconnect<'a>(
 
 #[tokio::test]
 async fn run_test_single() {
-    run_test(DEFAULT_TIMEOUT, test_single).await;
+    run_test(DEFAULT_TIMEOUT, test_single, Default::default()).await;
 }
 
 #[tokio::test]
 async fn run_test_upgrade() {
-    run_test(DEFAULT_TIMEOUT, test_upgrade).await;
+    run_test(DEFAULT_TIMEOUT, test_upgrade, Default::default()).await;
 }
 
 #[tokio::test]
 async fn run_test_disconnect() {
-    run_test(DEFAULT_TIMEOUT, test_disconnect).await;
+    run_test(DEFAULT_TIMEOUT, test_disconnect, Default::default()).await;
 }

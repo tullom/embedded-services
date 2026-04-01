@@ -168,5 +168,5 @@ async fn test_unconstrained<'a>(
 
 #[tokio::test]
 async fn run_test_unconstrained() {
-    run_test(DEFAULT_TIMEOUT, test_unconstrained).await;
+    run_test(DEFAULT_TIMEOUT, test_unconstrained, Default::default()).await;
 }

@@ -10,14 +10,18 @@ mod common;
 
 use common::{LOW_POWER, ServiceMutex};
 use power_policy_interface::service::event::Event as ServiceEvent;
+use power_policy_service::service::config::Config;
 
 use crate::common::DeviceType;
+use crate::common::MINIMAL_POWER;
 use crate::common::assert_no_event;
 use crate::common::{
     DEFAULT_TIMEOUT, HIGH_POWER, assert_consumer_connected, assert_consumer_disconnected, mock::FnCall, run_test,
 };
 
 const PER_CALL_TIMEOUT: Duration = Duration::from_millis(1000);
+
+const MIN_CONSUMER_THRESHOLD_MW: u32 = 7500;
 
 /// Test the basic consumer flow with a single device.
 async fn test_single<'a>(
@@ -336,17 +340,142 @@ async fn test_disconnect<'a>(
     assert_no_event(service_receiver);
 }
 
+/// Test minimum consumer power logic.
+///
+/// Config for this test uses [`MIN_CONSUMER_THRESHOLD_MW`].
+async fn test_min_consumer_power<'a>(
+    service: &ServiceMutex<'a, 'a>,
+    service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
+    device0: &DeviceType<'a>,
+    device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+    _device1: &DeviceType<'a>,
+    _device1_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+) {
+    info!("Running test_min_consumer_power");
+    // Connect with power below the minimum threshold.
+    {
+        device0
+            .lock()
+            .await
+            .simulate_consumer_connection(MINIMAL_POWER.into())
+            .await;
+
+        // Power policy shouldn't connect, so this call should timeout.
+        assert_eq!(
+            with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await,
+            Err(TimeoutError)
+        );
+        device0_signal.reset();
+
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
+    }
+
+    // Service shouldn't broadcast any events in this case.
+    assert_no_event(service_receiver);
+}
+
+/// Test that we won't swap if the capabilities are the same
+async fn test_no_swap<'a>(
+    service: &ServiceMutex<'a, 'a>,
+    service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
+    device0: &DeviceType<'a>,
+    device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+    device1: &DeviceType<'a>,
+    device1_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+) {
+    info!("Running test_no_swap");
+    // Device0 connection at low power
+    {
+        device0
+            .lock()
+            .await
+            .simulate_consumer_connection(LOW_POWER.into())
+            .await;
+
+        assert_eq!(
+            with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await.unwrap(),
+            (
+                1,
+                FnCall::ConnectConsumer(ConsumerPowerCapability {
+                    capability: LOW_POWER,
+                    flags: ConsumerFlags::none(),
+                })
+            )
+        );
+        device0_signal.reset();
+
+        assert_consumer_connected(
+            service_receiver,
+            device0,
+            ConsumerPowerCapability {
+                capability: LOW_POWER,
+                flags: ConsumerFlags::none(),
+            },
+        )
+        .await;
+
+        // Ensure consumer change doesn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
+    }
+    // Device1 connection at low power, should not cause a swap since capabilities are the same
+    {
+        device1
+            .lock()
+            .await
+            .simulate_consumer_connection(LOW_POWER.into())
+            .await;
+
+        // These should timeout since we shouldn't swap
+        assert_eq!(
+            with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await,
+            Err(TimeoutError)
+        );
+        device0_signal.reset();
+
+        assert_eq!(
+            with_timeout(PER_CALL_TIMEOUT, device1_signal.wait()).await,
+            Err(TimeoutError)
+        );
+        device1_signal.reset();
+
+        // Shouldn't affect provider power computation
+        assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
+    }
+
+    // Service shouldn't broadcast any events in this case since we shouldn't swap.
+    assert_no_event(service_receiver);
+}
+
 #[tokio::test]
 async fn run_test_swap_higher() {
-    run_test(DEFAULT_TIMEOUT, test_swap_higher).await;
+    run_test(DEFAULT_TIMEOUT, test_swap_higher, Default::default()).await;
 }
 
 #[tokio::test]
 async fn run_test_single() {
-    run_test(DEFAULT_TIMEOUT, test_single).await;
+    run_test(DEFAULT_TIMEOUT, test_single, Default::default()).await;
 }
 
 #[tokio::test]
 async fn run_test_disconnect() {
-    run_test(DEFAULT_TIMEOUT, test_disconnect).await;
+    run_test(DEFAULT_TIMEOUT, test_disconnect, Default::default()).await;
+}
+
+#[tokio::test]
+async fn run_test_min_consumer_power() {
+    run_test(
+        DEFAULT_TIMEOUT,
+        test_min_consumer_power,
+        Config {
+            min_consumer_threshold_mw: Some(MIN_CONSUMER_THRESHOLD_MW),
+            ..Default::default()
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn run_test_no_swap() {
+    run_test(DEFAULT_TIMEOUT, test_no_swap, Default::default()).await;
 }

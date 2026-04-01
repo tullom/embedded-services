@@ -20,7 +20,7 @@ use power_policy_interface::{
     capability::{ConsumerPowerCapability, PowerCapability, ProviderPowerCapability},
     service::{UnconstrainedState, event::Event as ServiceEvent},
 };
-use power_policy_service::service::Service;
+use power_policy_service::service::{Service, config::Config};
 use power_policy_service::{psu::ArrayEventReceivers, service::registration::ArrayRegistration};
 
 pub mod mock;
@@ -28,6 +28,11 @@ pub mod mock;
 use mock::Mock;
 
 use crate::common::mock::FnCall;
+
+pub const MINIMAL_POWER: PowerCapability = PowerCapability {
+    voltage_mv: 5000,
+    current_ma: 500,
+};
 
 pub const LOW_POWER: PowerCapability = PowerCapability {
     voltage_mv: 5000,
@@ -97,7 +102,7 @@ where
     type Fut = Fut;
 }
 
-pub async fn run_test<F>(timeout: Duration, test: F)
+pub async fn run_test<F>(timeout: Duration, test: F, config: Config)
 where
     for<'a> F: TestArgsFnOnce<
             'a,
@@ -151,7 +156,7 @@ where
     let power_policy = Mutex::new(power_policy_service::service::Service::new(
         power_policy_registration,
         &service_context,
-        Default::default(),
+        config,
     ));
 
     with_timeout(
