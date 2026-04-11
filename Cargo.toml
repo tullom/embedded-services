@@ -2,7 +2,8 @@
 resolver = "2"
 members = [
     "battery-service",
-    "battery-service-messages",
+    "battery-service-interface",
+    "battery-service-relay",
     "thermal-service",
     "thermal-service-messages",
     "cfu-service",
@@ -55,7 +56,8 @@ unwrap_used = "deny"
 [workspace.dependencies]
 aligned = "0.4"
 anyhow = "1.0"
-battery-service-messages = { path = "./battery-service-messages" }
+battery-service-interface = { path = "./battery-service-interface" }
+battery-service-relay = { path = "./battery-service-relay" }
 bitfield = "0.17.0"
 bitflags = "2.8.0"
 bitvec = { version = "1.0.1", default-features = false }
@@ -74,7 +76,7 @@ embassy-imxrt = { git = "https://github.com/OpenDevicePartnership/embassy-imxrt"
 embassy-sync = "0.7.2"
 embassy-time = "0.5.0"
 embassy-time-driver = "0.2.1"
-embedded-batteries-async = "0.3"
+embedded-batteries-async = "0.3.4"
 cfu-service = { path = "./cfu-service" }
 embedded-cfu-protocol = { git = "https://github.com/OpenDevicePartnership/embedded-cfu" }
 embedded-hal = "1.0"
