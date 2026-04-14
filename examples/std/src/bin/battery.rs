@@ -38,8 +38,8 @@ async fn embassy_main(spawner: Spawner) {
         battery_wrapper.process().await
     }
 
-    spawner.must_spawn(battery_wrapper_process(wrapper));
-    spawner.must_spawn(run_app(battery_service));
+    spawner.spawn(battery_wrapper_process(wrapper).expect("Failed to create battery wrapper task"));
+    spawner.spawn(run_app(battery_service).expect("Failed to create run_app task"));
 }
 
 #[embassy_executor::task]
@@ -59,8 +59,8 @@ pub async fn run_app(battery_service: battery_service::Service<'static, 1>) {
     let mut count: usize = 1;
     loop {
         Timer::after(Duration::from_secs(1)).await;
-        if count.is_multiple_of(const { 60 * 60 * 60 }) {
-            if let Err(e) = battery_service
+        if count.is_multiple_of(const { 60 * 60 * 60 })
+            && let Err(e) = battery_service
                 .execute_event(battery_service::context::BatteryEvent {
                     event: battery_service::context::BatteryEventInner::PollStaticData,
                     device_id: bs::device::DeviceId(0),
@@ -70,7 +70,6 @@ pub async fn run_app(battery_service: battery_service::Service<'static, 1>) {
                 failures += 1;
                 embedded_services::error!("Fuel gauge static data error: {:#?}", e);
             }
-        }
         if let Err(e) = battery_service
             .execute_event(battery_service::context::BatteryEvent {
                 event: battery_service::context::BatteryEventInner::PollDynamicData,
@@ -104,6 +103,6 @@ fn main() {
     let executor = EXECUTOR.init(Executor::new());
     // Run battery service
     executor.run(|spawner| {
-        spawner.must_spawn(embassy_main(spawner));
+        spawner.spawn(embassy_main(spawner).expect("Failed to create embassy_main task"));
     });
 }

@@ -72,6 +72,36 @@ who = "Jerry Xie <jerryxie@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "1.0.0"
 
+[[audits.embassy-embedded-hal]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.5.0 -> 0.6.0"
+
+[[audits.embassy-executor]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.9.1 -> 0.10.0"
+
+[[audits.embassy-executor-macros]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.7.0 -> 0.8.0"
+
+[[audits.embassy-hal-internal]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.4.0"
+
+[[audits.embassy-time]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.5.0 -> 0.5.1"
+
+[[audits.embassy-time-driver]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.1 -> 0.2.2"
+
 [[audits.embedded-batteries]]
 who = "Felipe Balbi <febalbi@microsoft.com>"
 criteria = "safe-to-deploy"
@@ -164,6 +194,11 @@ who = "Kurtis Dinelle <kdinelle@microsoft.com>"
 criteria = "safe-to-deploy"
 version = "0.2.0"
 notes = "ODP crates are always trusted."
+
+[[audits.embedded-mcu-hal]]
+who = "Billy Price <williamp@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "0.2.0"
 
 [[audits.embedded-sensors-hal]]
 who = "Kurtis Dinelle <kdinelle@microsoft.com>"
