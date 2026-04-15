@@ -35,7 +35,7 @@ use embedded_services::type_c::controller::{self, Controller, PortStatus};
 use embedded_services::type_c::event::{PortEvent, PortNotificationSingle, PortPending, PortStatusChanged};
 use embedded_services::{debug, error, info, trace, warn};
 use embedded_usb_pd::ado::Ado;
-use embedded_usb_pd::{Error, LocalPortId, PdError};
+use embedded_usb_pd::{Error, LocalPortId, PdError, PowerRole};
 
 use crate::wrapper::backing::DynPortState;
 use crate::wrapper::message::*;

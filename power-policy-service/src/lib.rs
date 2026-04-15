@@ -79,7 +79,16 @@ impl PowerPolicy {
 
     async fn process_notify_disconnect(&self, device: &device::Device) -> Result<(), Error> {
         self.context.send_response(Ok(policy::ResponseData::Complete)).await;
-        if let Some(consumer) = self.state.lock().await.current_consumer_state.take() {
+
+        self.remove_connected_provider(device.id()).await;
+        if let Some(consumer) = self
+            .state
+            .lock()
+            .await
+            .current_consumer_state
+            .take_if(|d| d.device_id == device.id())
+        {
+            // Current PSU is disconnected, disconnect chargers, and attempt to select next PSU
             info!("Device{}: Connected consumer disconnected", consumer.device_id.0);
             self.disconnect_chargers().await?;
 
@@ -87,10 +96,10 @@ impl PowerPolicy {
                 data: CommsData::ConsumerDisconnected(consumer.device_id),
             })
             .await;
+
+            self.update_current_consumer().await?;
         }
 
-        self.remove_connected_provider(device.id()).await;
-        self.update_current_consumer().await?;
         Ok(())
     }
 
