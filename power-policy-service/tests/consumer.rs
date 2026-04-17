@@ -4,6 +4,8 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, TimeoutError, with_timeout};
 use embedded_services::GlobalRawMutex;
 use embedded_services::info;
+use power_policy_interface::capability::ProviderFlags;
+use power_policy_interface::capability::ProviderPowerCapability;
 use power_policy_interface::capability::{ConsumerFlags, ConsumerPowerCapability};
 
 mod common;
@@ -16,6 +18,8 @@ use crate::common::DeviceType;
 use crate::common::MINIMAL_POWER;
 use crate::common::Test;
 use crate::common::assert_no_event;
+use crate::common::assert_provider_connected;
+use crate::common::assert_provider_disconnected;
 use crate::common::{
     DEFAULT_TIMEOUT, HIGH_POWER, assert_consumer_connected, assert_consumer_disconnected, mock::FnCall, run_test,
 };
@@ -356,6 +360,190 @@ impl Test for TestDisconnect {
     }
 }
 
+/// Test a disconnect initiated by a consumer other than the current consumer.
+struct TestDisconnectOtherConsumer;
+
+impl Test for TestDisconnectOtherConsumer {
+    async fn run<'a>(
+        &mut self,
+        service: &ServiceMutex<'a, 'a>,
+        service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
+        device0: &DeviceType<'a>,
+        device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+        device1: &DeviceType<'a>,
+        device1_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+    ) {
+        info!("Running test_disconnect_other_consumer");
+        // Device0 connection at high power
+        {
+            device0
+                .lock()
+                .await
+                .simulate_consumer_connection(HIGH_POWER.into())
+                .await;
+
+            assert_eq!(
+                with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await.unwrap(),
+                (
+                    1,
+                    FnCall::ConnectConsumer(ConsumerPowerCapability {
+                        capability: HIGH_POWER,
+                        flags: ConsumerFlags::none(),
+                    })
+                )
+            );
+            device0_signal.reset();
+
+            assert_consumer_connected(
+                service_receiver,
+                device0,
+                ConsumerPowerCapability {
+                    capability: HIGH_POWER,
+                    flags: ConsumerFlags::none(),
+                },
+            )
+            .await;
+
+            // Ensure consumer change doesn't affect provider power computation
+            assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
+        }
+        // Device1 connection at low power
+        {
+            device1
+                .lock()
+                .await
+                .simulate_consumer_connection(LOW_POWER.into())
+                .await;
+
+            assert_eq!(
+                with_timeout(PER_CALL_TIMEOUT, device1_signal.wait()).await,
+                Err(TimeoutError)
+            );
+            device1_signal.reset();
+
+            // Ensure consumer change doesn't affect provider power computation
+            assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
+        }
+
+        // Test disconnect device1, should have no effect on device0
+        {
+            device1.lock().await.simulate_disconnect().await;
+
+            // Power policy shouldn't call any functions on disconnect so we'll timeout
+            assert_eq!(
+                with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await,
+                Err(TimeoutError)
+            );
+            assert_eq!(
+                with_timeout(PER_CALL_TIMEOUT, device1_signal.wait()).await,
+                Err(TimeoutError)
+            );
+
+            // Ensure consumer change doesn't affect provider power computation
+            assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
+        }
+
+        assert_no_event(service_receiver);
+    }
+}
+
+/// Test a disconnect initiated by a provider other than the current consumer.
+struct TestDisconnectOtherProvider;
+
+impl Test for TestDisconnectOtherProvider {
+    async fn run<'a>(
+        &mut self,
+        service: &ServiceMutex<'a, 'a>,
+        service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
+        device0: &DeviceType<'a>,
+        device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+        device1: &DeviceType<'a>,
+        device1_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+    ) {
+        info!("Running test_disconnect_other_provider");
+        // Device0 connection at high power
+        {
+            device0
+                .lock()
+                .await
+                .simulate_consumer_connection(HIGH_POWER.into())
+                .await;
+
+            assert_eq!(
+                with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await.unwrap(),
+                (
+                    1,
+                    FnCall::ConnectConsumer(ConsumerPowerCapability {
+                        capability: HIGH_POWER,
+                        flags: ConsumerFlags::none(),
+                    })
+                )
+            );
+            device0_signal.reset();
+
+            assert_consumer_connected(
+                service_receiver,
+                device0,
+                ConsumerPowerCapability {
+                    capability: HIGH_POWER,
+                    flags: ConsumerFlags::none(),
+                },
+            )
+            .await;
+
+            // Ensure consumer change doesn't affect provider power computation
+            assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
+        }
+        // Device1 connect as provider
+        {
+            device1.lock().await.simulate_provider_connection(LOW_POWER).await;
+
+            assert_eq!(
+                with_timeout(PER_CALL_TIMEOUT, device1_signal.wait()).await.unwrap(),
+                (
+                    1,
+                    FnCall::ConnectProvider(ProviderPowerCapability {
+                        capability: LOW_POWER,
+                        flags: ProviderFlags::none(),
+                    })
+                )
+            );
+            device1_signal.reset();
+
+            assert_provider_connected(
+                service_receiver,
+                device1,
+                ProviderPowerCapability {
+                    capability: LOW_POWER,
+                    flags: ProviderFlags::none(),
+                },
+            )
+            .await;
+            assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 7500);
+        }
+
+        // Test disconnect device1, should have no effect on device0
+        {
+            device1.lock().await.simulate_disconnect().await;
+
+            // Power policy shouldn't call any functions on disconnect so we'll timeout
+            assert_eq!(
+                with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await,
+                Err(TimeoutError)
+            );
+            assert_eq!(
+                with_timeout(PER_CALL_TIMEOUT, device1_signal.wait()).await,
+                Err(TimeoutError)
+            );
+
+            assert_provider_disconnected(service_receiver, device1).await;
+            assert_eq!(service.lock().await.compute_total_provider_power_mw().await, 0);
+        }
+
+        assert_no_event(service_receiver);
+    }
+}
+
 /// Test minimum consumer power logic.
 ///
 /// Config for this test uses [`MIN_CONSUMER_THRESHOLD_MW`].
@@ -485,6 +673,16 @@ async fn run_test_single() {
 #[tokio::test]
 async fn run_test_disconnect() {
     run_test(DEFAULT_TIMEOUT, TestDisconnect, Default::default()).await;
+}
+
+#[tokio::test]
+async fn run_test_disconnect_other_consumer() {
+    run_test(DEFAULT_TIMEOUT, TestDisconnectOtherConsumer, Default::default()).await;
+}
+
+#[tokio::test]
+async fn run_test_disconnect_other_provider() {
+    run_test(DEFAULT_TIMEOUT, TestDisconnectOtherProvider, Default::default()).await;
 }
 
 #[tokio::test]
