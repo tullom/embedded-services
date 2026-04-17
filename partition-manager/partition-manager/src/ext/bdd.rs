@@ -8,7 +8,7 @@ use crate::{Error, Partition, PartitionGuard, RO, RW};
 
 impl<F, MARKER, M: RawMutex> PartitionGuard<'_, F, MARKER, M> {
     const fn start_block(&self, block_size: u32) -> Option<u32> {
-        if self.offset % block_size != 0 {
+        if !self.offset.is_multiple_of(block_size) {
             None
         } else {
             Some(self.offset / block_size)

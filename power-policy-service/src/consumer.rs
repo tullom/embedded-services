@@ -93,10 +93,10 @@ impl PowerPolicy {
         let mut unconstrained_new = UnconstrainedState::default();
         for node in self.context.devices() {
             let device = node.data::<Device>().ok_or(Error::InvalidDevice)?;
-            if let Some(capability) = device.consumer_capability().await {
-                if capability.flags.unconstrained_power() {
-                    unconstrained_new.available += 1;
-                }
+            if let Some(capability) = device.consumer_capability().await
+                && capability.flags.unconstrained_power()
+            {
+                unconstrained_new.available += 1;
             }
         }
 
