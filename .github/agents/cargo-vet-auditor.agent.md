@@ -86,10 +86,49 @@ For every crate you review, systematically check ALL of the following:
 
 ## How to Review
 
+### Non-Interactive Execution
+
+**CRITICAL:** All `cargo vet` commands must run non-interactively:
+
+- **`diff` / `inspect`:** Always set the pager to a non-interactive command to
+  prevent the pager from waiting for input. Use `$env:PAGER='more.com';`
+  (PowerShell) or `PAGER=cat` (POSIX) before the command.
+- **`certify`:** Always pass `--accept-all` along with `--criteria`, `--who`,
+  and `--notes` to skip all interactive prompts.
+
+Never run a `cargo vet` command that could block waiting for terminal input.
+
+### Exemptions Are a Last Resort
+
+Do **not** recommend adding `[[exemptions]]` entries without good reason.
+Each exemption bypasses the audit process entirely and requires explicit manual
+confirmation from the user. Always prefer performing a full or delta audit over
+exempting a crate. If an exemption is truly necessary (e.g., the crate is only
+needed at `safe-to-run` level for dev tooling, or an import source removal
+requires temporary coverage), flag it clearly and let the user decide.
+
+Every exemption **must** include a `notes` field explaining why the exemption
+exists and under what conditions it can be removed.
+
+### Duplicate-Audit Guardrail
+
+Before recommending or running certification, check whether an identical
+`[[audits.<crate>]]` entry (same who/criteria/version-or-delta/notes) already
+exists in `supply-chain/audits.toml`.
+
+If an identical entry already exists:
+
+- Do not recommend re-certifying with the same data
+- Report that the crate is already certified with identical audit content
+- If duplicates already exist, explicitly recommend deduplicating by keeping one
+  copy and removing the rest
+
+Rationale: retried `cargo vet certify` commands can append duplicate blocks.
+
 ### For Delta Audits
 
 Use `PAGER=cat cargo vet diff CRATE FROM TO` (POSIX) or
-`$env:PAGER='cat'; cargo vet diff CRATE FROM TO` (PowerShell) to view the diff.
+`$env:PAGER='more.com'; cargo vet diff CRATE FROM TO` (PowerShell) to view the diff.
 
 Focus on:
 1. New `unsafe` blocks or modifications to existing ones
@@ -101,7 +140,7 @@ Focus on:
 ### For Full Version Audits
 
 Use `PAGER=cat cargo vet inspect CRATE VERSION` (POSIX) or
-`$env:PAGER='cat'; cargo vet inspect CRATE VERSION` (PowerShell) to view source.
+`$env:PAGER='more.com'; cargo vet inspect CRATE VERSION` (PowerShell) to view source.
 
 Focus on:
 1. All `unsafe` code (search for `unsafe`)
