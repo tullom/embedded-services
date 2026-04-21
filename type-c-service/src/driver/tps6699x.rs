@@ -6,6 +6,7 @@ use bitflags::bitflags;
 use core::array::from_fn;
 use core::future::Future;
 use core::iter::zip;
+use core::num::NonZeroU8;
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time::Delay;
 use embedded_hal_async::i2c::I2c;
@@ -29,7 +30,9 @@ use tps6699x::command::{
 use tps6699x::fw_update::UpdateConfig as FwUpdateConfig;
 use tps6699x::registers::port_config::TypeCStateMachine;
 use type_c_interface::port::event::PortEventBitfield;
-use type_c_interface::port::{ATTN_VDM_LEN, DpConfig, DpStatus, PdStateMachineConfig, RetimerFwUpdateState};
+use type_c_interface::port::{
+    ATTN_VDM_LEN, DpConfig, DpStatus, PdStateMachineConfig, RetimerFwUpdateState, SystemPowerState,
+};
 use type_c_interface::port::{
     AttnVdm, Controller, ControllerStatus, DpPinConfig, OtherVdm, PortStatus, SendVdm, TbtConfig,
     TypeCStateMachineState, UsbControlConfig,
@@ -51,12 +54,41 @@ struct FwUpdateState<'a, M: RawMutex, B: I2c> {
     guards: [Option<tps6699x_drv::InterruptGuard<'a, M, B>>; MAX_SUPPORTED_PORTS],
 }
 
+/// The method used to control USB capabilities.
+///
+/// This required method may vary based on the TI firmware version of the TPS6699x.
+#[derive(Debug, Copy, Clone, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum UsbControlMethod {
+    /// Set USB capabilities through [`tps6699x::registers::tx_identity`].
+    #[default]
+    TxIdentity,
+
+    /// Set USB capabilities through [`tps6699x::registers::field_sets::DpConfig`].
+    ///
+    /// This method ignores USB4, only controlling USB2 and USB3. It can only set
+    /// USB2 and USB3 together, not independently, therefore it will disable both
+    /// if either [`UsbControlConfig::usb2_enabled`] or [`UsbControlConfig::usb3_enabled`]
+    /// is false.
+    DpConfig,
+
+    /// Set USB capabilities through [`tps6699x::registers::field_sets::TbtConfig`].
+    TbtConfig,
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Config {
+    pub usb_control_method: UsbControlMethod,
+}
+
 pub struct Tps6699x<'a, M: RawMutex, B: I2c> {
     port_events: heapless::Vec<PortEventBitfield, MAX_SUPPORTED_PORTS>,
     tps6699x: tps6699x_drv::Tps6699x<'a, M, B>,
     update_state: Option<FwUpdateState<'a, M, B>>,
     /// Firmware update configuration
     fw_update_config: FwUpdateConfig,
+    config: Config,
 }
 
 impl<'a, M: RawMutex, B: I2c> Tps6699x<'a, M, B> {
@@ -67,6 +99,7 @@ impl<'a, M: RawMutex, B: I2c> Tps6699x<'a, M, B> {
         tps6699x: tps6699x_drv::Tps6699x<'a, M, B>,
         num_ports: usize,
         fw_update_config: FwUpdateConfig,
+        config: Config,
     ) -> Option<Self> {
         if num_ports == 0 || num_ports > MAX_SUPPORTED_PORTS {
             None
@@ -77,6 +110,7 @@ impl<'a, M: RawMutex, B: I2c> Tps6699x<'a, M, B> {
                 tps6699x,
                 update_state: None,
                 fw_update_config,
+                config,
             })
         }
     }
@@ -342,7 +376,8 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
                     port_status.dual_power = source_pdos[0].dual_role_power();
                     port_status.unconstrained_power = source_pdos[0].unconstrained_power();
                 }
-            } else if pd_status.is_source() {
+            } else if status.port_role() {
+                // port_role is true for source
                 // Implicit source contract
                 let current = TypecCurrent::try_from(port_control.typec_current()).map_err(Error::Pd)?;
                 debug!("Port{} type-C source current: {:#?}", port.0, current);
@@ -432,7 +467,7 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
     async fn reconfigure_retimer(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
         let input = {
             let mut input = tps6699x::command::muxr::Input(0);
-            input.set_en_retry_on_target_addr_1(true);
+            input.set_en_retry_on_target_addr_tbt(true);
             input
         };
 
@@ -632,26 +667,54 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
         port: LocalPortId,
         config: UsbControlConfig,
     ) -> Result<(), Error<Self::BusError>> {
-        let mut tx_identity_value = 0;
+        match self.config.usb_control_method {
+            UsbControlMethod::TxIdentity => {
+                let tx_identity_value =
+                    (config.usb2_enabled as u8) | (config.usb3_enabled as u8) << 1 | (config.usb4_enabled as u8) << 2;
 
-        if config.usb2_enabled {
-            tx_identity_value |= 1 << 0;
-        }
-        if config.usb3_enabled {
-            tx_identity_value |= 1 << 1;
-        }
-        if config.usb4_enabled {
-            tx_identity_value |= 1 << 2;
+                self.tps6699x
+                    .modify_tx_identity(port, |identity| {
+                        let mut dfp_vdo = DfpVdo(identity.dfp1_vdo());
+                        dfp_vdo.set_host_capability(tx_identity_value);
+                        identity.set_dfp1_vdo(dfp_vdo.0);
+                        identity.clone()
+                    })
+                    .await?;
+            }
+            UsbControlMethod::DpConfig => {
+                use tps6699x::registers::DpUsbDataPath;
+                let usb_data_path = if config.usb2_enabled && config.usb3_enabled {
+                    DpUsbDataPath::MayBeRequired
+                } else {
+                    DpUsbDataPath::NotRequired
+                };
+
+                self.tps6699x
+                    .modify_dp_config(port, |dp_config| {
+                        dp_config.set_usb_data_path(usb_data_path);
+                        *dp_config
+                    })
+                    .await?;
+            }
+            UsbControlMethod::TbtConfig => {
+                use tps6699x::registers::TbtUsbDataPath;
+                let usb_data_path = if config.usb2_enabled && config.usb3_enabled && config.usb4_enabled {
+                    TbtUsbDataPath::MayBeRequired
+                } else {
+                    TbtUsbDataPath::NotRequired
+                };
+
+                self.tps6699x
+                    .lock_inner()
+                    .await
+                    .modify_tbt_config(port, |tbt_config| {
+                        tbt_config.set_usb_data_path(usb_data_path);
+                        *tbt_config
+                    })
+                    .await?;
+            }
         }
 
-        self.tps6699x
-            .modify_tx_identity(port, |identity| {
-                let mut dfp_vdo = DfpVdo(identity.dfp1_vdo());
-                dfp_vdo.set_host_capability(tx_identity_value);
-                identity.set_dfp1_vdo(dfp_vdo.0);
-                identity.clone()
-            })
-            .await?;
         Ok(())
     }
 
@@ -690,7 +753,7 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
         match self.tps6699x.execute_drst(port).await? {
             ReturnValue::Success => Ok(()),
             r => {
-                debug!("Error executing DRST on port {}: {:#?}", port.0, r);
+                error!("Error executing DRST on port {}: {:#?}", port.0, r);
                 Err(Error::Pd(PdError::InvalidResponse))
             }
         }
@@ -746,6 +809,39 @@ impl<M: RawMutex, B: I2c> Controller for Tps6699x<'_, M, B> {
     ) -> Result<Option<lpm::ResponseData>, Error<Self::BusError>> {
         self.tps6699x.execute_ucsi_command(&command).await
     }
+
+    async fn execute_electrical_disconnect(
+        &mut self,
+        port: LocalPortId,
+        reconnect_time_s: Option<NonZeroU8>,
+    ) -> Result<(), Error<Self::BusError>> {
+        let reconnect_time_s = reconnect_time_s.map(|t| t.get());
+        match self.tps6699x.execute_disc(port, reconnect_time_s).await? {
+            ReturnValue::Success => Ok(()),
+            r => {
+                debug!("Error executing DISC on port {}: {:#?}", port.0, r);
+                Err(Error::Pd(PdError::InvalidResponse))
+            }
+        }
+    }
+
+    async fn set_power_state(
+        &mut self,
+        port: LocalPortId,
+        state: SystemPowerState,
+    ) -> Result<(), Error<Self::BusError>> {
+        use tps6699x::registers::SystemPowerState as DriverSystemPowerState;
+
+        let driver_state = match state {
+            SystemPowerState::S0 => DriverSystemPowerState::S0,
+            SystemPowerState::S3 => DriverSystemPowerState::S3,
+            SystemPowerState::S4 => DriverSystemPowerState::S4,
+            SystemPowerState::S5 => DriverSystemPowerState::S5,
+            SystemPowerState::S0ix => DriverSystemPowerState::S0Ix,
+        };
+
+        self.tps6699x.set_sx_app_config(port, driver_state).await
+    }
 }
 
 impl<'a, M: RawMutex, BUS: I2c> AsRef<tps6699x_drv::Tps6699x<'a, M, BUS>> for Tps6699x<'a, M, BUS> {
@@ -764,6 +860,7 @@ impl<'a, M: RawMutex, BUS: I2c> AsMut<tps6699x_drv::Tps6699x<'a, M, BUS>> for Tp
 pub fn tps66994<'a, M: RawMutex, BUS: I2c>(
     controller: tps6699x_drv::Tps6699x<'a, M, BUS>,
     fw_update_config: FwUpdateConfig,
+    config: Config,
 ) -> Tps6699x<'a, M, BUS> {
     const _: () = assert!(
         TPS66994_NUM_PORTS > 0 && TPS66994_NUM_PORTS <= MAX_SUPPORTED_PORTS,
@@ -772,13 +869,14 @@ pub fn tps66994<'a, M: RawMutex, BUS: I2c>(
 
     // Panic safety: statically checked above
     #[allow(clippy::unwrap_used)]
-    Tps6699x::try_new(controller, TPS66994_NUM_PORTS, fw_update_config).unwrap()
+    Tps6699x::try_new(controller, TPS66994_NUM_PORTS, fw_update_config, config).unwrap()
 }
 
 /// Create a TPS66993 object mutex
 pub fn tps66993<'a, M: RawMutex, BUS: I2c>(
     controller: tps6699x_drv::Tps6699x<'a, M, BUS>,
     fw_update_config: FwUpdateConfig,
+    config: Config,
 ) -> Tps6699x<'a, M, BUS> {
     const _: () = assert!(
         TPS66993_NUM_PORTS > 0 && TPS66993_NUM_PORTS <= MAX_SUPPORTED_PORTS,
@@ -787,7 +885,7 @@ pub fn tps66993<'a, M: RawMutex, BUS: I2c>(
 
     // Panic safety: statically checked above
     #[allow(clippy::unwrap_used)]
-    Tps6699x::try_new(controller, TPS66993_NUM_PORTS, fw_update_config).unwrap()
+    Tps6699x::try_new(controller, TPS66993_NUM_PORTS, fw_update_config, config).unwrap()
 }
 
 bitfield! {

@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "eSPI embedded service implementation"
 repository = "https://github.com/OpenDevicePartnership/embedded-services"
-rust-version = "1.88"
+rust-version.workspace = true
 license = "MIT"
+
+[package.metadata.cargo-machete]
+ignored = ["log"]
 
 [lints]
 workspace = true
@@ -15,7 +18,6 @@ bitfield.workspace = true
 embedded-services.workspace = true
 defmt = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
-embassy-time.workspace = true
 embassy-sync.workspace = true
 embassy-imxrt = { workspace = true, features = ["mimxrt633s"] }
 embassy-futures.workspace = true
@@ -40,11 +42,9 @@ default = []
 defmt = [
     "dep:defmt",
     "embedded-services/defmt",
-    "embassy-time/defmt",
-    "embassy-time/defmt-timestamp-uptime",
     "embassy-sync/defmt",
     "embassy-imxrt/defmt",
     "mctp-rs/defmt",
 ]
 
-log = ["dep:log", "embedded-services/log", "embassy-time/log"]
+log = ["dep:log", "embedded-services/log"]

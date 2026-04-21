@@ -403,20 +403,26 @@ async fn task(spawner: Spawner) {
     static CFU_CLIENT: OnceLock<CfuClient> = OnceLock::new();
     let cfu_client = CfuClient::new(&CFU_CLIENT).await;
 
-    spawner.spawn(power_policy_task(
-        ArrayEventReceivers::new(
-            [&wrapper0.ports[0].proxy, &wrapper1.ports[0].proxy],
-            [policy_receiver0, policy_receiver1],
-        ),
-        power_service,
-    ).expect("Failed to create power policy task"));
+    spawner.spawn(
+        power_policy_task(
+            ArrayEventReceivers::new(
+                [&wrapper0.ports[0].proxy, &wrapper1.ports[0].proxy],
+                [policy_receiver0, policy_receiver1],
+            ),
+            power_service,
+        )
+        .expect("Failed to create power policy task"),
+    );
 
-    spawner.spawn(type_c_service_task(
-        type_c_service,
-        EventReceiver::new(controller_context, power_policy_subscriber),
-        [wrapper0, wrapper1],
-        cfu_client,
-    ).expect("Failed to create type-c service task"));
+    spawner.spawn(
+        type_c_service_task(
+            type_c_service,
+            EventReceiver::new(controller_context, power_policy_subscriber),
+            [wrapper0, wrapper1],
+            cfu_client,
+        )
+        .expect("Failed to create type-c service task"),
+    );
     spawner.spawn(wrapper_task(wrapper0).expect("Failed to create wrapper0 task"));
     spawner.spawn(wrapper_task(wrapper1).expect("Failed to create wrapper1 task"));
     spawner.spawn(opm_task(controller_context, [state0, state1]).expect("Failed to create opm task"));

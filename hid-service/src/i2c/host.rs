@@ -13,8 +13,22 @@ use embedded_services::{error, trace};
 use super::{Command as I2cCommand, I2cSlaveAsync};
 use crate::Error;
 
-const DEVICE_RESPONSE_TIMEOUT_MS: u64 = 200;
-const DATA_READ_TIMEOUT_MS: u64 = 50;
+/// Timeout configuration for I2C HID host operations.
+pub struct Config {
+    /// Timeout for device response reads.
+    pub device_response_timeout: Duration,
+    /// Timeout for data reads from the host.
+    pub data_read_timeout: Duration,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            device_response_timeout: Duration::from_millis(200),
+            data_read_timeout: Duration::from_millis(50),
+        }
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Access {
@@ -28,22 +42,24 @@ pub struct Host<B: I2cSlaveAsync> {
     response: Signal<GlobalRawMutex, Option<hid::Response<'static>>>,
     buffer: OwnedRef<'static, u8>,
     bus: Mutex<GlobalRawMutex, B>,
+    timeout_config: Config,
 }
 
 impl<B: I2cSlaveAsync> Host<B> {
-    pub fn new(id: DeviceId, bus: B, buffer: OwnedRef<'static, u8>) -> Self {
+    pub fn new(id: DeviceId, bus: B, buffer: OwnedRef<'static, u8>, timeout_config: Config) -> Self {
         Host {
             id,
             tp: Endpoint::uninit(EndpointID::External(External::Host)),
             response: Signal::new(),
             buffer,
             bus: Mutex::new(bus),
+            timeout_config,
         }
     }
 
-    async fn read_bus(&self, timeout_ms: u64, buffer: &mut [u8]) -> Result<(), Error<B::Error>> {
+    async fn read_bus(&self, timeout: Duration, buffer: &mut [u8]) -> Result<(), Error<B::Error>> {
         let mut bus = self.bus.lock().await;
-        with_timeout(Duration::from_millis(timeout_ms), bus.respond_to_write(buffer))
+        with_timeout(timeout, bus.respond_to_write(buffer))
             .await
             .map_err(|_| {
                 error!("Response timeout");
@@ -55,11 +71,11 @@ impl<B: I2cSlaveAsync> Host<B> {
             })
     }
 
-    async fn write_bus(&self, timeout_ms: u64, buffer: &[u8]) -> Result<(), Error<B::Error>> {
+    async fn write_bus(&self, timeout: Duration, buffer: &[u8]) -> Result<(), Error<B::Error>> {
         let mut bus = self.bus.lock().await;
         // Send response, timeout if the host doesn't read so we don't get stuck here
         trace!("Sending {} bytes", buffer.len());
-        with_timeout(Duration::from_millis(timeout_ms), bus.respond_to_read(buffer))
+        with_timeout(timeout, bus.respond_to_read(buffer))
             .await
             .map_err(|_| {
                 error!("Response timeout");
@@ -77,7 +93,7 @@ impl<B: I2cSlaveAsync> Host<B> {
         let buffer_len = buffer.len();
 
         self.read_bus(
-            DATA_READ_TIMEOUT_MS,
+            self.timeout_config.data_read_timeout,
             buffer
                 .get_mut(..2)
                 .ok_or(Error::Hid(hid::Error::InvalidSize(InvalidSizeError {
@@ -95,7 +111,7 @@ impl<B: I2cSlaveAsync> Host<B> {
         )?);
         trace!("Reading {} bytes", length);
         self.read_bus(
-            DATA_READ_TIMEOUT_MS,
+            self.timeout_config.data_read_timeout,
             buffer
                 .get_mut(2..length as usize)
                 .ok_or(Error::Hid(hid::Error::InvalidSize(InvalidSizeError {
@@ -121,7 +137,7 @@ impl<B: I2cSlaveAsync> Host<B> {
     async fn process_command(&self, device: &hid::Device) -> Result<hid::Command<'static>, Error<B::Error>> {
         trace!("Waiting for command");
         let mut cmd = [0u8; 2];
-        self.read_bus(DATA_READ_TIMEOUT_MS, &mut cmd).await?;
+        self.read_bus(self.timeout_config.data_read_timeout, &mut cmd).await?;
 
         let cmd = u16::from_le_bytes(cmd);
         let opcode = Opcode::try_from(cmd).map_err(|e| {
@@ -137,7 +153,8 @@ impl<B: I2cSlaveAsync> Host<B> {
             if hid::ReportId::has_extended_report_id(cmd) {
                 trace!("Reading extended report ID");
                 let mut report_id = [0u8; 1];
-                self.read_bus(DATA_READ_TIMEOUT_MS, &mut report_id).await?;
+                self.read_bus(self.timeout_config.data_read_timeout, &mut report_id)
+                    .await?;
 
                 Some(hid::ReportId(report_id[0]))
             } else {
@@ -152,7 +169,7 @@ impl<B: I2cSlaveAsync> Host<B> {
             let mut addr = [0u8; 2];
             // If the command has a response then we only needed to consume the data register address
             trace!("Waiting for host data access");
-            self.read_bus(DATA_READ_TIMEOUT_MS, &mut addr).await?;
+            self.read_bus(self.timeout_config.data_read_timeout, &mut addr).await?;
 
             let reg = u16::from_le_bytes(addr);
             if reg != device.regs.data_reg {
@@ -167,7 +184,7 @@ impl<B: I2cSlaveAsync> Host<B> {
                 let buffer_len = buffer.len();
 
                 self.read_bus(
-                    DATA_READ_TIMEOUT_MS,
+                    self.timeout_config.data_read_timeout,
                     buffer
                         .get_mut(0..2)
                         .ok_or(Error::Hid(hid::Error::InvalidSize(InvalidSizeError {
@@ -186,7 +203,7 @@ impl<B: I2cSlaveAsync> Host<B> {
 
                 trace!("Reading {} bytes", length);
                 self.read_bus(
-                    DATA_READ_TIMEOUT_MS,
+                    self.timeout_config.data_read_timeout,
                     buffer
                         .get_mut(2..length as usize)
                         .ok_or(Error::Hid(hid::Error::InvalidSize(InvalidSizeError {
@@ -224,7 +241,7 @@ impl<B: I2cSlaveAsync> Host<B> {
     async fn process_register_access(&self) -> Result<(), Error<B::Error>> {
         let mut reg = [0u8; 2];
         trace!("Waiting for register address");
-        self.read_bus(DATA_READ_TIMEOUT_MS, &mut reg).await?;
+        self.read_bus(self.timeout_config.data_read_timeout, &mut reg).await?;
 
         let reg = u16::from_le_bytes(reg);
         trace!("Register address {:#x}", reg);
@@ -324,20 +341,23 @@ impl<B: I2cSlaveAsync> Host<B> {
                 | hid::Response::InputReport(data)
                 | hid::Response::FeatureReport(data) => {
                     let bytes = data.borrow().map_err(Error::Buffer)?;
-                    self.write_bus(DEVICE_RESPONSE_TIMEOUT_MS, bytes.borrow()).await
+                    self.write_bus(self.timeout_config.device_response_timeout, bytes.borrow())
+                        .await
                 }
                 hid::Response::Command(cmd) => match cmd {
                     hid::CommandResponse::GetIdle(freq) => {
                         let freq: u16 = freq.into();
                         let mut buffer = [0u8; 2];
                         buffer.copy_from_slice(freq.to_le_bytes().as_slice());
-                        self.write_bus(DEVICE_RESPONSE_TIMEOUT_MS, &buffer).await
+                        self.write_bus(self.timeout_config.device_response_timeout, &buffer)
+                            .await
                     }
                     hid::CommandResponse::GetProtocol(protocol) => {
                         let protocol: u16 = protocol.into();
                         let mut buffer = [0u8; 2];
                         buffer.copy_from_slice(protocol.to_le_bytes().as_slice());
-                        self.write_bus(DEVICE_RESPONSE_TIMEOUT_MS, &buffer).await
+                        self.write_bus(self.timeout_config.device_response_timeout, &buffer)
+                            .await
                     }
                     hid::CommandResponse::Vendor => Ok(()),
                 },

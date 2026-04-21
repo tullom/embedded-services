@@ -29,7 +29,12 @@ macro_rules! impl_host_request_task {
             // In this macro since static items cannot be generic either
             static HOST: ::static_cell::StaticCell<hid_service::i2c::Host<$i2c_slave_ty>> =
                 ::static_cell::StaticCell::new();
-            let host = hid_service::i2c::Host::new(keyboard_service::HID_KB_ID, kb_i2c, buf);
+            let host = hid_service::i2c::Host::new(
+                keyboard_service::HID_KB_ID,
+                kb_i2c,
+                buf,
+                hid_service::i2c::HostConfig::default(),
+            );
             let host = HOST.init(host);
 
             keyboard_service::hid_kb::handle_host_requests(host).await;

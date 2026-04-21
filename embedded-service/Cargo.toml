@@ -5,27 +5,20 @@ edition = "2024"
 license = "MIT"
 description = "Embedded Service Layer for IPC, Feature Customization and Extension in Embedded Devices."
 repository = "https://github.com/OpenDevicePartnership/embedded-services"
-rust-version = "1.88"
+rust-version.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
 bitfield.workspace = true
-bitflags.workspace = true
 bitvec.workspace = true
-cfg-if.workspace = true
-chrono = { workspace = true, optional = true }
 critical-section.workspace = true
 defmt = { workspace = true, optional = true }
-document-features.workspace = true
 embassy-sync.workspace = true
 embassy-time.workspace = true
 embassy-futures.workspace = true
 embedded-cfu-protocol.workspace = true
-embedded-hal-async.workspace = true
-embedded-io-async.workspace = true
-embedded-io.workspace = true
 embedded-usb-pd.workspace = true
 heapless.workspace = true
 log = { workspace = true, optional = true }

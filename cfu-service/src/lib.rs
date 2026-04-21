@@ -9,6 +9,7 @@ use embedded_services::{GlobalRawMutex, comms, error, info, intrusive_list, trac
 pub mod buffer;
 pub mod component;
 pub mod host;
+mod responses;
 pub mod splitter;
 pub mod task;
 

@@ -1,5 +1,6 @@
 //! PD controller related code
 use core::future::Future;
+use core::num::NonZeroU8;
 
 use embassy_sync::channel::{DynamicReceiver, DynamicSender};
 use embedded_usb_pd::ucsi::{self, lpm};
@@ -365,6 +366,25 @@ impl PortResponseData {
 /// Port-specific command response
 pub type PortResponse = Result<PortResponseData, PdError>;
 
+/// System power state for Sx App Config register.
+///
+/// Used to notify the PD controller of the current system power state,
+/// which triggers Application Configuration updates (e.g., crossbar reconfiguration).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SystemPowerState {
+    /// S0 - System fully running
+    S0,
+    /// S3 - Suspend to RAM
+    S3,
+    /// S4 - Hibernate
+    S4,
+    /// S5 - Soft off
+    S5,
+    /// S0ix - Modern standby / Connected standby
+    S0ix,
+}
+
 /// PD controller command-specific data
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -652,4 +672,24 @@ pub trait Controller {
         &mut self,
         command: lpm::LocalCommand,
     ) -> impl Future<Output = Result<Option<lpm::ResponseData>, Error<Self::BusError>>>;
+
+    /// Execute an electrical disconnect on the given port, if supported by the controller.
+    ///
+    /// If `reconnect_time_s` is provided, the controller should automatically reconnect the port after the specified time
+    /// has elapsed. If `reconnect_time_s` is [`None`], the port should remain disconnected until manually reconnected.
+    fn execute_electrical_disconnect(
+        &mut self,
+        port: LocalPortId,
+        reconnect_time_s: Option<NonZeroU8>,
+    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
+
+    /// Set the system power state on the given port.
+    ///
+    /// This notifies the PD controller of the current system power state,
+    /// which triggers Application Configuration updates (e.g., crossbar reconfiguration).
+    fn set_power_state(
+        &mut self,
+        port: LocalPortId,
+        state: SystemPowerState,
+    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
 }

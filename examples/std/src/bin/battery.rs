@@ -66,10 +66,10 @@ pub async fn run_app(battery_service: battery_service::Service<'static, 1>) {
                     device_id: bs::device::DeviceId(0),
                 })
                 .await
-            {
-                failures += 1;
-                embedded_services::error!("Fuel gauge static data error: {:#?}", e);
-            }
+        {
+            failures += 1;
+            embedded_services::error!("Fuel gauge static data error: {:#?}", e);
+        }
         if let Err(e) = battery_service
             .execute_event(battery_service::context::BatteryEvent {
                 event: battery_service::context::BatteryEventInner::PollDynamicData,

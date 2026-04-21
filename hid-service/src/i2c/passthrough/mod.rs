@@ -8,13 +8,22 @@ macro_rules! define_i2c_passthrough_device_task {
         pub async fn device_task(bus: $bus, id: ::embedded_services::hid::DeviceId, addr: u8) {
             use ::embassy_sync::once_lock::OnceLock;
             use ::embedded_services::{define_static_buffer, error, hid, info};
-            use $crate::i2c::Device;
+            use $crate::i2c::{Device, DeviceConfig};
             define_static_buffer!(gen_buffer, u8, [0; 512]);
             let gen_buffer = gen_buffer::get_mut().unwrap();
 
             info!("Create HID passthrough device {}", id.0);
             static DEVICE: OnceLock<Device<u8, $bus>> = OnceLock::new();
-            let device = DEVICE.get_or_init(|| Device::new(id, addr, bus, Default::default(), gen_buffer));
+            let device = DEVICE.get_or_init(|| {
+                Device::new(
+                    id,
+                    addr,
+                    bus,
+                    Default::default(),
+                    gen_buffer,
+                    DeviceConfig::default(),
+                )
+            });
             hid::register_device(device).await.unwrap();
 
             info!("Starting device task");
@@ -37,12 +46,19 @@ macro_rules! define_i2c_passthrough_host_task {
         ) {
             use ::embassy_sync::once_lock::OnceLock;
             use ::embedded_services::{comms, define_static_buffer, error, info};
-            use $crate::i2c::Host;
+            use $crate::i2c::{Host, HostConfig};
 
             info!("Creating HIDI2C Host");
             define_static_buffer!(host_buffer, u8, [0; 128]);
             static HOST: OnceLock<Host<$bus>> = OnceLock::new();
-            let host = HOST.get_or_init(|| Host::new(HID_ID0, bus, host_buffer::get_mut().unwrap()));
+            let host = HOST.get_or_init(|| {
+                Host::new(
+                    HID_ID0,
+                    bus,
+                    host_buffer::get_mut().unwrap(),
+                    HostConfig::default(),
+                )
+            });
             comms::register_endpoint(host, &host.tp).await.unwrap();
 
             loop {

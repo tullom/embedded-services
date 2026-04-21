@@ -1,4 +1,33 @@
 /// This example is supposed to init a debug service and a mock eSPI service to demonstrate sending defmt messages from the debug service to the eSPI service
+// On Windows the MSVC linker does not process defmt's ELF linker script (`defmt.x`), so the
+// `__DEFMT_MARKER_*` section-boundary symbols that defmt 1.0.x requires for log-level filtering
+// are undefined at link time.  Provide no-op stubs here so the binary links successfully.
+// Log-level filtering will be non-functional (all levels treated as enabled), which is
+// acceptable for a std development example.
+#[cfg(windows)]
+mod _defmt_linker_stubs {
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_TRACE_START: u32 = 0;
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_TRACE_END: u32 = 0;
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_DEBUG_START: u32 = 0;
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_DEBUG_END: u32 = 0;
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_INFO_START: u32 = 0;
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_INFO_END: u32 = 0;
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_WARN_START: u32 = 0;
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_WARN_END: u32 = 0;
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_ERROR_START: u32 = 0;
+    #[unsafe(no_mangle)]
+    pub static __DEFMT_MARKER_ERROR_END: u32 = 0;
+}
+
 use embassy_executor::{Executor, Spawner};
 use embedded_services::info;
 use static_cell::StaticCell;
