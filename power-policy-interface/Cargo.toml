@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["log"]
+
 [lints]
 workspace = true
 
@@ -16,7 +19,6 @@ embassy-futures.workspace = true
 num_enum.workspace = true
 bitfield.workspace = true
 log = { workspace = true, optional = true }
-heapless.workspace = true
 embedded-batteries-async.workspace = true
 
 [features]

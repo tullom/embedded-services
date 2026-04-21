@@ -9,6 +9,9 @@ categories = ["embedded", "hardware-support", "no-std::no-alloc", "no-std"]
 
 readme = "README.md"
 
+[package.metadata.cargo-machete]
+ignored = ["critical-section"]
+
 [lints]
 workspace = true
 

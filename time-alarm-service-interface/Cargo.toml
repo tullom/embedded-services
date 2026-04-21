@@ -19,3 +19,6 @@ log = ["dep:log"]
 
 [lints]
 workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["log"]

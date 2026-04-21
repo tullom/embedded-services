@@ -97,7 +97,7 @@ portable-atomic = { version = "1.11", default-features = false }
 power-policy-interface = { path = "./power-policy-interface" }
 paste = "1.0.15"
 power-policy-service = { path = "./power-policy-service" }
-fixed = "=1.23.1"
+fixed = "1.23.1"
 log = "0.4"
 proc-macro2 = "1.0"
 quote = "1.0"

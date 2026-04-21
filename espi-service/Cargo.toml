@@ -8,13 +8,12 @@ rust-version.workspace = true
 license = "MIT"
 
 [package.metadata.cargo-machete]
-ignored = ["log"]
+ignored = ["log", "cortex-m", "cortex-m-rt"]
 
 [lints]
 workspace = true
 
 [dependencies]
-bitfield.workspace = true
 embedded-services.workspace = true
 defmt = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
@@ -22,7 +21,6 @@ embassy-sync.workspace = true
 embassy-imxrt = { workspace = true, features = ["mimxrt633s"] }
 embassy-futures.workspace = true
 mctp-rs = { workspace = true, features = ["espi"] }
-num_enum.workspace = true
 odp-service-common.workspace = true
 
 [target.'cfg(target_os = "none")'.dependencies]
