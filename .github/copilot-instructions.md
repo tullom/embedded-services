@@ -6,7 +6,7 @@ This is an embedded controller (EC) services workspace — a collection of `no_s
 
 ## Build, Test, and Lint
 
-Toolchain: Rust 1.88 (`rust-toolchain.toml`), edition 2024. Targets: `x86_64-unknown-linux-gnu` (std/testing) and `thumbv8m.main-none-eabihf` (ARM Cortex-M33).
+Toolchain: Rust 1.90 (`rust-toolchain.toml`), edition 2024. Targets: `x86_64-unknown-linux-gnu` (std/testing) and `thumbv8m.main-none-eabihf` (ARM Cortex-M33).
 
 ```shell
 # Format
