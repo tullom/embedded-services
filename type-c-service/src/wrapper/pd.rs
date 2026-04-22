@@ -32,11 +32,18 @@ where
         new_contract: bool,
         sink_ready: bool,
     ) -> Result<(), PdError> {
+        let contract_changed = port_state.status.available_sink_contract != status.available_sink_contract;
         let deadline = &mut port_state.sink_ready_deadline;
 
-        if new_contract && !sink_ready {
+        // Don't start the timeout if the sink has signaled it's ready or if the contract didn't change.
+        // The latter ensures that soft resets won't continually reset the ready timeout
+        debug!(
+            "Port{}: Check sink ready: new_contract={:?}, sink_ready={:?}, contract_changed={:?}, deadline={:?}",
+            port.0, new_contract, sink_ready, contract_changed, deadline,
+        );
+        if new_contract && !sink_ready && contract_changed {
             // Start the timeout
-            // Double the spec maximum transition time to provide a safety margin for hardware/controller delays our out-of-spec controllers.
+            // Double the spec maximum transition time to provide a safety margin for hardware/controller delays or out-of-spec controllers.
             let timeout_ms = if status.epr {
                 T_PS_TRANSITION_EPR_MS
             } else {
@@ -50,7 +57,6 @@ where
         } else if deadline.is_some()
             && (!status.is_connected() || status.available_sink_contract.is_none() || sink_ready)
         {
-            // Clear the timeout
             debug!("Port{}: Sink ready timeout cleared", port.0);
             *deadline = None;
         }

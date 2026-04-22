@@ -9,6 +9,7 @@
 # - msrv: check that the msrv specified in the crate is correct
 # - clippy-arm-examples: checks that ARM examples contain no clippy warnings
 # - clippy-std-examples: checks that std examples contain no clippy warnings
+# - machete: checks for unused dependencies in Cargo.toml files
 permissions:
   contents: read
 # This configuration allows maintainers of this repo to create a branch and pull request based on
@@ -185,7 +186,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        msrv: ["1.88"]
+        msrv: ["1.90"]
         target: [x86_64-unknown-linux-gnu, thumbv8m.main-none-eabihf]
     name: ubuntu / ${{ matrix.msrv }} / ${{ matrix.target }}
     steps:
@@ -280,3 +281,18 @@ jobs:
         working-directory: ${{ matrix.example_directory }}
         run: |
           cargo clippy --locked
+
+  machete:
+    # cargo-machete checks for unused dependencies in Cargo.toml files
+    runs-on: ubuntu-latest
+    name: ubuntu / stable / machete
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: cargo install cargo-machete
+        uses: taiki-e/install-action@cargo-machete
+      - name: cargo machete
+        run: cargo machete

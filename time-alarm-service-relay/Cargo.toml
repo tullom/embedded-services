@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["log"]
+
 [dependencies]
 defmt = { workspace = true, optional = true }
 log = { workspace = true, optional = true }

@@ -9,6 +9,9 @@ categories = ["embedded", "hardware-support", "no-std::no-alloc", "no-std"]
 
 readme = "README.md"
 
+[package.metadata.cargo-machete]
+ignored = ["critical-section"]
+
 [lints]
 workspace = true
 
@@ -37,3 +40,4 @@ defmt = ["dep:defmt"]
 
 [dev-dependencies]
 embassy-futures.workspace = true
+critical-section = { workspace = true, features = ["std"] }

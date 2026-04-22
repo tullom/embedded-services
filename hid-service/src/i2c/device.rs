@@ -1,6 +1,7 @@
 use core::borrow::BorrowMut;
 
 use embassy_sync::mutex::Mutex;
+use embassy_time::{Duration, with_timeout};
 use embedded_hal_async::i2c::{AddressMode, I2c};
 use embedded_services::hid::{DeviceContainer, InvalidSizeError, Opcode, Response};
 use embedded_services::{GlobalRawMutex, buffer::*};
@@ -8,22 +9,48 @@ use embedded_services::{error, hid, info, trace};
 
 use crate::Error;
 
+/// Timeout configuration for I2C HID device operations.
+pub struct Config {
+    /// Timeout for descriptor reads and commands.
+    pub device_response_timeout: Duration,
+    /// Timeout for input reports and feature data reads.
+    pub data_read_timeout: Duration,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            device_response_timeout: Duration::from_millis(200),
+            data_read_timeout: Duration::from_millis(50),
+        }
+    }
+}
+
 pub struct Device<A: AddressMode + Copy, B: I2c<A>> {
     device: hid::Device,
     buffer: OwnedRef<'static, u8>,
     address: A,
     descriptor: Mutex<GlobalRawMutex, Option<hid::Descriptor>>,
     bus: Mutex<GlobalRawMutex, B>,
+    timeout_config: Config,
 }
 
 impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
-    pub fn new(id: hid::DeviceId, address: A, bus: B, regs: hid::RegisterFile, buffer: OwnedRef<'static, u8>) -> Self {
+    pub fn new(
+        id: hid::DeviceId,
+        address: A,
+        bus: B,
+        regs: hid::RegisterFile,
+        buffer: OwnedRef<'static, u8>,
+        timeout_config: Config,
+    ) -> Self {
         Self {
             device: hid::Device::new(id, regs),
             buffer,
             address,
             descriptor: Mutex::new(None),
             bus: Mutex::new(bus),
+            timeout_config,
         }
     }
 
@@ -47,10 +74,19 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
             })))?;
 
         reg.copy_from_slice(&self.device.regs.hid_desc_reg.to_le_bytes());
-        if let Err(e) = bus.write_read(self.address, &reg, buf).await {
+        with_timeout(
+            self.timeout_config.device_response_timeout,
+            bus.write_read(self.address, &reg, buf),
+        )
+        .await
+        .map_err(|_| {
+            error!("Read HID descriptor timeout");
+            Error::Hid(hid::Error::Timeout)
+        })?
+        .map_err(|e| {
             error!("Failed to read HID descriptor");
-            return Err(Error::Bus(e));
-        }
+            Error::Bus(e)
+        })?;
 
         let res = hid::Descriptor::decode_from_slice(buf);
         match res {
@@ -89,8 +125,9 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
         let len = desc.w_report_desc_length as usize;
 
         let mut bus = self.bus.lock().await;
-        if let Err(e) = bus
-            .write_read(
+        with_timeout(
+            self.timeout_config.device_response_timeout,
+            bus.write_read(
                 self.address,
                 &reg,
                 buf.get_mut(0..len)
@@ -98,12 +135,17 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
                         expected: len,
                         actual: buffer_len,
                     })))?,
-            )
-            .await
-        {
+            ),
+        )
+        .await
+        .map_err(|_| {
+            error!("Read report descriptor timeout");
+            Error::Hid(hid::Error::Timeout)
+        })?
+        .map_err(|e| {
             error!("Failed to read report descriptor");
-            return Err(Error::Bus(e));
-        }
+            Error::Bus(e)
+        })?;
 
         self.buffer.reference().slice(0..len).map_err(Error::Buffer)
     }
@@ -123,10 +165,16 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
             })))?;
 
         let mut bus = self.bus.lock().await;
-        if let Err(e) = bus.read(self.address, buf).await {
-            error!("Failed to read input report");
-            return Err(Error::Bus(e));
-        }
+        with_timeout(self.timeout_config.data_read_timeout, bus.read(self.address, buf))
+            .await
+            .map_err(|_| {
+                error!("Read input report timeout");
+                Error::Hid(hid::Error::Timeout)
+            })?
+            .map_err(|e| {
+                error!("Failed to read input report");
+                Error::Bus(e)
+            })?;
 
         self.buffer
             .reference()
@@ -164,27 +212,39 @@ impl<A: AddressMode + Copy, B: I2c<A>> Device<A, B> {
             })?;
 
         let mut bus = self.bus.lock().await;
-        if let Err(e) = bus
-            .write(
+        with_timeout(
+            self.timeout_config.device_response_timeout,
+            bus.write(
                 self.address,
                 buf.get(..len)
                     .ok_or(Error::Hid(hid::Error::InvalidSize(InvalidSizeError {
                         expected: len,
                         actual: buffer_len,
                     })))?,
-            )
-            .await
-        {
+            ),
+        )
+        .await
+        .map_err(|_| {
+            error!("Write command timeout");
+            Error::Hid(hid::Error::Timeout)
+        })?
+        .map_err(|e| {
             error!("Failed to write command");
-            return Err(Error::Bus(e));
-        }
+            Error::Bus(e)
+        })?;
 
         if opcode.has_response() {
             trace!("Reading host data");
-            if let Err(e) = bus.read(self.address, buf).await {
-                error!("Failed to read host data");
-                return Err(Error::Bus(e));
-            }
+            with_timeout(self.timeout_config.data_read_timeout, bus.read(self.address, buf))
+                .await
+                .map_err(|_| {
+                    error!("Read host data timeout");
+                    Error::Hid(hid::Error::Timeout)
+                })?
+                .map_err(|e| {
+                    error!("Failed to read host data");
+                    Error::Bus(e)
+                })?;
 
             return Ok(Some(Response::FeatureReport(self.buffer.reference())));
         }

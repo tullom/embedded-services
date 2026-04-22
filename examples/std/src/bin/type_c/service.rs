@@ -129,16 +129,22 @@ async fn task(spawner: Spawner) {
     static CFU_CLIENT: OnceLock<CfuClient> = OnceLock::new();
     let cfu_client = CfuClient::new(&CFU_CLIENT).await;
 
-    spawner.spawn(power_policy_task(
-        ArrayEventReceivers::new([&wrapper.ports[0].proxy], [policy_receiver]),
-        power_service,
-    ).expect("Failed to create power policy task"));
-    spawner.spawn(type_c_service_task(
-        type_c_service,
-        EventReceiver::new(controller_context, power_policy_subscriber),
-        [wrapper],
-        cfu_client,
-    ).expect("Failed to create type-c service task"));
+    spawner.spawn(
+        power_policy_task(
+            ArrayEventReceivers::new([&wrapper.ports[0].proxy], [policy_receiver]),
+            power_service,
+        )
+        .expect("Failed to create power policy task"),
+    );
+    spawner.spawn(
+        type_c_service_task(
+            type_c_service,
+            EventReceiver::new(controller_context, power_policy_subscriber),
+            [wrapper],
+            cfu_client,
+        )
+        .expect("Failed to create type-c service task"),
+    );
     spawner.spawn(controller_task(wrapper, controller).expect("Failed to create controller task"));
 
     Timer::after_millis(1000).await;

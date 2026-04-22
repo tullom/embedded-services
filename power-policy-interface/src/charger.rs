@@ -5,7 +5,10 @@ use embassy_futures::select::select;
 use embassy_sync::{channel::Channel, mutex::Mutex};
 use embedded_services::{GlobalRawMutex, debug, error, info, intrusive_list, trace, warn};
 
-use crate::capability::{ConsumerPowerCapability, PowerCapability};
+use crate::{
+    capability::{ConsumerFlags, ConsumerPowerCapability, PowerCapability},
+    charger,
+};
 
 /// Charger controller trait that device drivers may use to integrate with internal messaging system
 pub trait ChargeController: embedded_batteries_async::charger::Charger {
@@ -274,7 +277,7 @@ where
     }
 
     #[allow(clippy::single_match)]
-    async fn process_controller_event(&self, _controller: &mut C, event: ChargerEvent) {
+    async fn process_controller_event(&self, controller: &mut C, event: ChargerEvent) {
         let state = self.get_state().await;
         match state.state {
             State::Powered(powered_substate) => match powered_substate {
@@ -287,9 +290,26 @@ where
                             },
                             capability: state.capability,
                         })
-                        .await
+                        .await;
+
+                        // If we have a cached capability, it means a power contract was sent to the charger before we finished initializing
+                        // Go ahead and apply that capability to the charger hardware.
+                        if let Some(power_capability) = state.capability {
+                            debug!("Charger just finished initializing and a new power policy configuration was detected while initializing.
+                             Executing attach sequence with cached capability");
+                            if let Err(e) = controller
+                                .attach_handler(ConsumerPowerCapability {
+                                    capability: power_capability,
+                                    flags: ConsumerFlags::none(),
+                                })
+                                .await
+                            {
+                                let err = charger::ChargerError::from(e);
+                                error!("Error executing charger power port attach sequence: {:?}", err)
+                            }
+                        }
                     }
-                    // If we are initializing, we don't care about anything else
+                    // If we are initializing, we don't want to update the state
                     _ => (),
                 },
                 PoweredSubstate::PsuAttached => match event {
@@ -362,13 +382,31 @@ where
                     // For the scenario where the charger is unpowered, we don't want to block the power policy
                     // from completing it's connect_consumer() call, as there might be cases where we don't want
                     // chargers to be powered or the charger can't be powered.
-                    error!("Charger detected new power policy configuration but it's unpowered!");
-                    Ok(ChargerResponseData::UnpoweredAck)
+                    error!(
+                        "Charger detected new power policy configuration but it's unpowered! 
+                    Caching capability so when we finish initializing, we start off with this capability set."
+                    );
+                    self.set_state(InternalState {
+                        state: state.state,
+                        capability: Some(power_capability.capability),
+                    })
+                    .await;
+                    Ok(charger::ChargerResponseData::UnpoweredAck)
                 }
                 State::Powered(substate) => match substate {
                     PoweredSubstate::Init => {
-                        error!("Charger detected new power policy configuration but charger is still initializing.");
-                        Err(ChargerError::InvalidState(State::Powered(PoweredSubstate::Init)))
+                        warn!(
+                            "Charger detected new power policy configuration but charger is still initializing.
+                             Caching capability so when we finish initializing, we start off with this capability set."
+                        );
+                        self.set_state(InternalState {
+                            state: state.state,
+                            capability: Some(power_capability.capability),
+                        })
+                        .await;
+                        Err(charger::ChargerError::InvalidState(State::Powered(
+                            PoweredSubstate::Init,
+                        )))
                     }
                     PoweredSubstate::PsuAttached | PoweredSubstate::PsuDetached => {
                         if power_capability.capability.current_ma == 0 {

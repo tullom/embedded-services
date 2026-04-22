@@ -6,11 +6,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["log", "defmt", "critical-section"]
+
 [dependencies]
-bitfield.workspace = true
 defmt = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
-embassy-executor.workspace = true
 embassy-futures.workspace = true
 embassy-sync.workspace = true
 embassy-time.workspace = true
@@ -26,7 +27,6 @@ defmt = [
     "embedded-services/defmt",
     "embassy-time/defmt",
     "embassy-sync/defmt",
-    "embassy-executor/defmt",
     "time-alarm-service-interface/defmt",
 ]
 
@@ -41,4 +41,3 @@ time-alarm-service = { path = ".", features = ["mock"] }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 critical-section = { version = "1.1", features = ["std"] }
 embassy-time = { workspace = true, features = ["std", "generic-queue-8"] }
-embassy-time-driver = { workspace = true }

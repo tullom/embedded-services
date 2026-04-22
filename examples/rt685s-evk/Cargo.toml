@@ -6,6 +6,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+[package.metadata.cargo-machete]
+ignored = ["cortex-m", "cortex-m-rt"]
+
 [workspace.lints.rust]
 warnings = "deny"
 
@@ -31,7 +34,7 @@ embassy-imxrt = { git = "https://github.com/OpenDevicePartnership/embassy-imxrt"
 
 embassy-embedded-hal = { version = "0.6.0", features = ["defmt"] }
 
-embassy-sync = { version = "0.8.0", features = ["defmt"] }
+embassy-sync = { version = "0.8", features = ["defmt"] }
 embassy-executor = { version = "0.10.0", features = [
     "platform-cortex-m",
     "executor-thread",
@@ -43,11 +46,7 @@ embassy-time = { version = "0.5.0", features = [
     "defmt",
     "defmt-timestamp-uptime",
 ] }
-futures = { version = "0.3.30", default-features = false, features = [
-    "async-await",
-] }
 mimxrt600-fcb = "0.1.0"
-mimxrt685s-pac = { version = "*", features = ["rt", "critical-section"] }
 
 embedded-cfu-protocol = { git = "https://github.com/OpenDevicePartnership/embedded-cfu" }
 embedded-services = { path = "../../embedded-service", features = ["defmt"] }
@@ -79,8 +78,6 @@ time-alarm-service-relay = { path = "../../time-alarm-service-relay", features =
 ] }
 
 static_cell = "2.1.0"
-embedded-hal = "1.0.0"
-embedded-hal-async = "1.0.0"
 
 platform-service = { path = "../../platform-service", features = [
     "defmt",

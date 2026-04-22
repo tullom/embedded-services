@@ -6,6 +6,10 @@ name = "pico-de-gallo"
 version = "0.1.0"
 edition = "2024"
 
+
+[package.metadata.cargo-machete]
+ignored = ["critical-section"]
+
 [workspace.lints.rust]
 warnings = "deny"
 
@@ -20,7 +24,6 @@ embassy-time = { version = "0.5.0", features = [
     "std",
     "generic-queue-8",
 ] }
-embassy-time-driver = { version = "0.2.1", optional = true }
 embassy-futures = "0.1.2"
 
 embedded-batteries-async = "0.3"
@@ -32,7 +35,6 @@ pico-de-gallo-hal = "0.1.0"
 env_logger = "0.11"
 log = "0.4.14"
 static_cell = "2"
-embedded-hal-async = "1.0.0"
 
 critical-section = { version = "1.1", features = ["std"] }
 bq40z50-rx = { version = "0.8", features = ["r5", "embassy-timeout"] }

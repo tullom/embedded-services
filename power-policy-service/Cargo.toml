@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "HID embedded service implementation"
 repository = "https://github.com/OpenDevicePartnership/embedded-services"
-rust-version = "1.88"
+rust-version.workspace = true
 license = "MIT"
+
+[package.metadata.cargo-machete]
+ignored = ["critical-section"]
 
 [lints]
 workspace = true
@@ -16,15 +19,11 @@ embassy-futures.workspace = true
 embassy-sync.workspace = true
 embassy-time.workspace = true
 embedded-services.workspace = true
-embedded-batteries-async.workspace = true
-num_enum.workspace = true
-bitfield.workspace = true
 log = { workspace = true, optional = true }
 heapless.workspace = true
 power-policy-interface.workspace = true
 
 [dev-dependencies]
-static_cell.workspace = true
 critical-section = { workspace = true, features = ["std"] }
 embassy-time = { workspace = true, features = ["std", "generic-queue-8"] }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }

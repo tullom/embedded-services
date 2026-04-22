@@ -2,8 +2,8 @@ mod device;
 mod host;
 pub mod passthrough;
 
-pub use device::*;
-pub use host::*;
+pub use device::{Config as DeviceConfig, Device};
+pub use host::{Access, Config as HostConfig, Host};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["log"]
+
 [lints]
 workspace = true
 
@@ -15,9 +18,7 @@ defmt = { workspace = true, optional = true }
 embassy-imxrt = { workspace = true, optional = true, features = ["unstable-pac"] }
 embassy-sync.workspace = true
 embassy-time.workspace = true
-embedded-cfu-protocol.workspace = true
 embedded-services.workspace = true
-heapless.workspace = true
 log = { workspace = true, optional = true }
 
 [features]
@@ -30,13 +31,11 @@ defmt = [
     "dep:defmt",
     "embassy-sync/defmt",
     "embassy-time/defmt",
-    "embedded-cfu-protocol/defmt",
     "embedded-services/defmt",
 ]
 log = [
     "dep:log",
     "embassy-sync/log",
     "embassy-time/log",
-    "embedded-cfu-protocol/log",
     "embedded-services/log",
 ]

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["log"]
+
 [dependencies]
 defmt = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
@@ -12,7 +15,6 @@ embedded-services.workspace = true
 num_enum.workspace = true
 
 battery-service-interface.workspace = true
-embedded-batteries-async.workspace = true
 
 [features]
 defmt = [
