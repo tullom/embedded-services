@@ -2,7 +2,6 @@
 #![no_main]
 
 use ::tps6699x::{ADDR1, TPS66994_NUM_PORTS};
-use cfu_service::CfuClient;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_imxrt::gpio::{Input, Inverter, Pull};
@@ -11,10 +10,8 @@ use embassy_imxrt::i2c::master::{Config, I2cMaster};
 use embassy_imxrt::{bind_interrupts, peripherals};
 use embassy_sync::channel::{Channel, DynamicReceiver, DynamicSender};
 use embassy_sync::mutex::Mutex;
-use embassy_sync::once_lock::OnceLock;
 use embassy_sync::pubsub::{DynImmediatePublisher, DynSubscriber, PubSubChannel};
 use embassy_time::{self as _, Delay};
-use embedded_cfu_protocol::protocol_definitions::{FwUpdateOffer, FwUpdateOfferResponse, FwVersion, HostToken};
 use embedded_services::GlobalRawMutex;
 use embedded_services::event::MapSender;
 use embedded_services::{error, info};
@@ -52,15 +49,6 @@ bind_interrupts!(struct Irqs {
     FLEXCOMM2 => embassy_imxrt::i2c::InterruptHandler<peripherals::FLEXCOMM2>;
 });
 
-struct Validator;
-
-impl type_c_service::wrapper::FwOfferValidator for Validator {
-    fn validate(&self, _current: FwVersion, _offer: &FwUpdateOffer) -> FwUpdateOfferResponse {
-        // For this example, we always accept the offer
-        FwUpdateOfferResponse::new_accept(HostToken::Driver)
-    }
-}
-
 type BusMaster<'a> = I2cMaster<'a, Async>;
 type BusDevice<'a> = I2cDevice<'a, GlobalRawMutex, BusMaster<'a>>;
 type Tps6699xMutex<'a> = Mutex<GlobalRawMutex, tps6699x_drv::Tps6699x<'a, GlobalRawMutex, BusDevice<'a>>>;
@@ -69,7 +57,6 @@ type Wrapper<'a> = ControllerWrapper<
     GlobalRawMutex,
     Tps6699xMutex<'a>,
     DynamicSender<'a, power_policy_interface::psu::event::EventData>,
-    Validator,
 >;
 type Controller<'a> = tps6699x::controller::Controller<GlobalRawMutex, BusDevice<'a>>;
 type InterruptProcessor<'a> = tps6699x::interrupt::InterruptProcessor<'a, GlobalRawMutex, BusDevice<'a>>;
@@ -120,15 +107,13 @@ async fn pd_controller_task(
         let event = event_receiver.wait_event().await;
 
         let output = wrapper
-            .process_event(
-                &mut event_receiver.sink_ready_timeout,
-                &mut event_receiver.cfu_event_receiver,
-                event,
-            )
+            .process_event(&mut event_receiver.sink_ready_timeout, event)
             .await;
         if let Err(e) = output {
             error!("Error processing event: {:?}", e);
+            continue;
         }
+
         let output = output.unwrap();
         if let Err(e) = wrapper.finalize(&mut event_receiver.power_proxies, output).await {
             error!("Error finalizing output: {:?}", e);
@@ -154,9 +139,8 @@ async fn type_c_service_task(
     service: &'static Mutex<GlobalRawMutex, ServiceType>,
     event_receiver: EventReceiver<'static, PowerPolicyReceiverType>,
     wrappers: [&'static Wrapper<'static>; NUM_PD_CONTROLLERS],
-    cfu_client: &'static CfuClient,
 ) {
-    type_c_service::task::task(service, event_receiver, wrappers, cfu_client).await;
+    type_c_service::task::task(service, event_receiver, wrappers).await;
 }
 
 #[embassy_executor::main]
@@ -208,7 +192,6 @@ async fn main(spawner: Spawner) {
     let storage = STORAGE.init(Storage::new(
         controller_context,
         CONTROLLER0_ID,
-        0, // CFU component ID
         [
             PortRegistration {
                 id: PORT0_ID,
@@ -256,6 +239,7 @@ async fn main(spawner: Spawner) {
         tps6699x,
         Default::default(),
         Default::default(),
+        "tps6699x_0",
     )));
 
     static WRAPPER: StaticCell<Wrapper> = StaticCell::new();
@@ -263,7 +247,6 @@ async fn main(spawner: Spawner) {
         controller_mutex,
         Default::default(),
         referenced,
-        Validator,
     ));
     let bridge_receiver = BridgeEventReceiver::new(&referenced.pd_controller);
     let bridge = Bridge::new(controller_mutex, &referenced.pd_controller);
@@ -295,17 +278,12 @@ async fn main(spawner: Spawner) {
     static TYPE_C_SERVICE: StaticCell<Mutex<GlobalRawMutex, ServiceType>> = StaticCell::new();
     let type_c_service = TYPE_C_SERVICE.init(Mutex::new(Service::create(Default::default(), controller_context)));
 
-    // Spin up CFU service
-    static CFU_CLIENT: OnceLock<CfuClient> = OnceLock::new();
-    let cfu_client = CfuClient::new(&CFU_CLIENT).await;
-
     info!("Spawining type-c service task");
     spawner.spawn(
         type_c_service_task(
             type_c_service,
             EventReceiver::new(controller_context, power_policy_subscriber),
             [wrapper],
-            cfu_client,
         )
         .expect("Failed to create type-c service task"),
     );
@@ -328,7 +306,6 @@ async fn main(spawner: Spawner) {
             ArrayPortEventReceivers::new(
                 InterruptReceiver::new(interrupt_receiver),
                 power_event_receivers,
-                &storage.cfu_device,
             ),
             wrapper,
         )

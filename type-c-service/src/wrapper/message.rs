@@ -24,26 +24,12 @@ pub struct PowerPolicyCommand {
     pub request: power_policy_interface::psu::CommandData,
 }
 
-/// CFU events
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum EventCfu {
-    /// CFU request
-    Request(cfu_service::component::RequestData),
-    /// Recovery tick
-    ///
-    /// Occurs when the FW update has timed out to abort the update and return hardware to its normal state
-    RecoveryTick,
-}
-
 /// Wrapper events
 pub enum Event {
     /// Port status changed
     PortEvent(LocalPortEvent),
     /// Power policy command received
     PowerPolicyCommand(PowerPolicyCommand),
-    /// Cfu event
-    CfuEvent(EventCfu),
 }
 
 /// Port status changed output data
@@ -115,10 +101,6 @@ pub enum Output {
     Vdm(vdm::Output),
     /// Power policy command received
     PowerPolicyCommand(OutputPowerPolicyCommand),
-    /// CFU recovery tick
-    CfuRecovery,
-    /// CFU response
-    CfuResponse(cfu_service::component::InternalResponseData),
     /// Dp status update
     DpStatusUpdate(OutputDpStatusChanged),
 }

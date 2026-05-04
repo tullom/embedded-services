@@ -1,8 +1,6 @@
-use cfu_service::CfuClient;
 use embassy_executor::{Executor, Spawner};
 use embassy_sync::channel::{Channel, DynamicReceiver, DynamicSender};
 use embassy_sync::mutex::Mutex;
-use embassy_sync::once_lock::OnceLock;
 use embassy_sync::pubsub::{DynImmediatePublisher, DynSubscriber, PubSubChannel};
 use embassy_time::Timer;
 use embedded_services::GlobalRawMutex;
@@ -71,11 +69,7 @@ async fn controller_task(
         let event = event_receiver.wait_event().await;
 
         let output = wrapper
-            .process_event(
-                &mut event_receiver.sink_ready_timeout,
-                &mut event_receiver.cfu_event_receiver,
-                event,
-            )
+            .process_event(&mut event_receiver.sink_ready_timeout, event)
             .await;
         if let Err(e) = output {
             error!("Error processing event: {e:?}");
@@ -121,7 +115,6 @@ async fn task(spawner: Spawner) {
     let storage = STORAGE.init(Storage::new(
         controller_context,
         CONTROLLER0_ID,
-        0, // CFU component ID (unused)
         [PortRegistration {
             id: PORT0_ID,
             sender: PORT0_CHANNEL.dyn_sender(),
@@ -165,7 +158,6 @@ async fn task(spawner: Spawner) {
     let event_receiver = ArrayPortEventReceivers::new(
         state.create_interrupt_receiver(),
         power_event_receivers,
-        &storage.cfu_device,
     );
 
     static CONTROLLER: StaticCell<Mutex<GlobalRawMutex, mock_controller::Controller>> = StaticCell::new();
@@ -177,7 +169,6 @@ async fn task(spawner: Spawner) {
         controller,
         Default::default(),
         referenced,
-        crate::mock_controller::Validator,
     ));
 
     let bridge_receiver = BridgeEventReceiver::new(&referenced.pd_controller);
@@ -210,10 +201,7 @@ async fn task(spawner: Spawner) {
     static TYPE_C_SERVICE: StaticCell<Mutex<GlobalRawMutex, ServiceType>> = StaticCell::new();
     let type_c_service = TYPE_C_SERVICE.init(Mutex::new(Service::create(Config::default(), controller_context)));
 
-    // Spin up CFU service
-    static CFU_CLIENT: OnceLock<CfuClient> = OnceLock::new();
-    let cfu_client = CfuClient::new(&CFU_CLIENT).await;
-
+    // Spin up power policy service
     spawner.spawn(
         power_policy_psu_task(
             PsuEventReceivers::new([&wrapper.ports[0].proxy], [policy_receiver]),
@@ -226,7 +214,6 @@ async fn task(spawner: Spawner) {
             type_c_service,
             EventReceiver::new(controller_context, power_policy_subscriber),
             [wrapper],
-            cfu_client,
         )
         .expect("Failed to create type-c service task"),
     );
@@ -271,10 +258,9 @@ async fn type_c_service_task(
     service: &'static Mutex<GlobalRawMutex, ServiceType>,
     event_receiver: EventReceiver<'static, PowerPolicyReceiverType>,
     wrappers: [&'static Wrapper<'static>; NUM_PD_CONTROLLERS],
-    cfu_client: &'static CfuClient,
 ) {
     info!("Starting type-c task");
-    type_c_service::task::task(service, event_receiver, wrappers, cfu_client).await;
+    type_c_service::task::task(service, event_receiver, wrappers).await;
 }
 
 fn main() {

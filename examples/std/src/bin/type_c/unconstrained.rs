@@ -1,11 +1,9 @@
 use crate::mock_controller::Wrapper;
-use cfu_service::CfuClient;
 use embassy_executor::{Executor, Spawner};
 use embassy_sync::channel::Channel;
 use embassy_sync::channel::DynamicReceiver;
 use embassy_sync::channel::DynamicSender;
 use embassy_sync::mutex::Mutex;
-use embassy_sync::once_lock::OnceLock;
 use embassy_sync::pubsub::{DynImmediatePublisher, DynSubscriber, PubSubChannel};
 use embassy_time::Timer;
 use embedded_services::GlobalRawMutex;
@@ -35,15 +33,12 @@ const NUM_PD_CONTROLLERS: usize = 3;
 
 const CONTROLLER0_ID: ControllerId = ControllerId(0);
 const PORT0_ID: GlobalPortId = GlobalPortId(0);
-const CFU0_ID: u8 = 0x00;
 
 const CONTROLLER1_ID: ControllerId = ControllerId(1);
 const PORT1_ID: GlobalPortId = GlobalPortId(1);
-const CFU1_ID: u8 = 0x01;
 
 const CONTROLLER2_ID: ControllerId = ControllerId(2);
 const PORT2_ID: GlobalPortId = GlobalPortId(2);
-const CFU2_ID: u8 = 0x02;
 
 const DELAY_MS: u64 = 1000;
 
@@ -91,11 +86,7 @@ async fn controller_task(
         let event = event_receiver.wait_event().await;
 
         let output = wrapper
-            .process_event(
-                &mut event_receiver.sink_ready_timeout,
-                &mut event_receiver.cfu_event_receiver,
-                event,
-            )
+            .process_event(&mut event_receiver.sink_ready_timeout, event)
             .await;
         if let Err(e) = output {
             error!("Error processing event: {e:?}");
@@ -125,7 +116,6 @@ async fn task(spawner: Spawner) {
     let storage0 = STORAGE0.init(Storage::new(
         controller_context,
         CONTROLLER0_ID,
-        CFU0_ID,
         [PortRegistration {
             id: PORT0_ID,
             sender: PORT0_CHANNEL.dyn_sender(),
@@ -153,7 +143,6 @@ async fn task(spawner: Spawner) {
     let event_receiver0 = ArrayPortEventReceivers::new(
         state0.create_interrupt_receiver(),
         power_event_receivers0,
-        &storage0.cfu_device,
     );
     static CONTROLLER0: StaticCell<Mutex<GlobalRawMutex, mock_controller::Controller>> = StaticCell::new();
     let controller0 = CONTROLLER0.init(Mutex::new(mock_controller::Controller::new(state0)));
@@ -162,7 +151,6 @@ async fn task(spawner: Spawner) {
         controller0,
         Default::default(),
         referenced0,
-        crate::mock_controller::Validator,
     ));
     let bridge_receiver0 = BridgeEventReceiver::new(&referenced0.pd_controller);
     let bridge0 = Bridge::new(controller0, &referenced0.pd_controller);
@@ -177,7 +165,6 @@ async fn task(spawner: Spawner) {
     let storage1 = STORAGE1.init(Storage::new(
         controller_context,
         CONTROLLER1_ID,
-        CFU1_ID,
         [PortRegistration {
             id: PORT1_ID,
             sender: PORT1_CHANNEL.dyn_sender(),
@@ -205,7 +192,6 @@ async fn task(spawner: Spawner) {
     let event_receiver1 = ArrayPortEventReceivers::new(
         state1.create_interrupt_receiver(),
         power_event_receivers1,
-        &storage1.cfu_device,
     );
     static CONTROLLER1: StaticCell<Mutex<GlobalRawMutex, mock_controller::Controller>> = StaticCell::new();
     let controller1 = CONTROLLER1.init(Mutex::new(mock_controller::Controller::new(state1)));
@@ -214,7 +200,6 @@ async fn task(spawner: Spawner) {
         controller1,
         Default::default(),
         referenced1,
-        crate::mock_controller::Validator,
     ));
     let bridge_receiver1 = BridgeEventReceiver::new(&referenced1.pd_controller);
     let bridge1 = Bridge::new(controller1, &referenced1.pd_controller);
@@ -229,7 +214,6 @@ async fn task(spawner: Spawner) {
     let storage2 = STORAGE2.init(Storage::new(
         controller_context,
         CONTROLLER2_ID,
-        CFU2_ID,
         [PortRegistration {
             id: PORT2_ID,
             sender: PORT2_CHANNEL.dyn_sender(),
@@ -257,7 +241,6 @@ async fn task(spawner: Spawner) {
     let event_receiver2 = ArrayPortEventReceivers::new(
         state2.create_interrupt_receiver(),
         power_event_receivers2,
-        &storage2.cfu_device,
     );
     static CONTROLLER2: StaticCell<Mutex<GlobalRawMutex, mock_controller::Controller>> = StaticCell::new();
     let controller2 = CONTROLLER2.init(Mutex::new(mock_controller::Controller::new(state2)));
@@ -266,7 +249,6 @@ async fn task(spawner: Spawner) {
         controller2,
         Default::default(),
         referenced2,
-        crate::mock_controller::Validator,
     ));
     let bridge_receiver2 = BridgeEventReceiver::new(&referenced2.pd_controller);
     let bridge2 = Bridge::new(controller2, &referenced2.pd_controller);
@@ -302,10 +284,6 @@ async fn task(spawner: Spawner) {
     static TYPE_C_SERVICE: StaticCell<Mutex<GlobalRawMutex, ServiceType>> = StaticCell::new();
     let type_c_service = TYPE_C_SERVICE.init(Mutex::new(Service::create(Default::default(), controller_context)));
 
-    // Spin up CFU service
-    static CFU_CLIENT: OnceLock<CfuClient> = OnceLock::new();
-    let cfu_client = CfuClient::new(&CFU_CLIENT).await;
-
     spawner.spawn(
         power_policy_task(
             PsuEventReceivers::new(
@@ -325,7 +303,6 @@ async fn task(spawner: Spawner) {
             type_c_service,
             EventReceiver::new(controller_context, power_policy_subscriber),
             [wrapper0, wrapper1, wrapper2],
-            cfu_client,
         )
         .expect("Failed to create type-c service task"),
     );
@@ -399,10 +376,9 @@ async fn type_c_service_task(
     service: &'static Mutex<GlobalRawMutex, ServiceType>,
     event_receiver: EventReceiver<'static, PowerPolicyReceiverType>,
     wrappers: [&'static Wrapper<'static>; NUM_PD_CONTROLLERS],
-    cfu_client: &'static CfuClient,
 ) {
     info!("Starting type-c task");
-    type_c_service::task::task(service, event_receiver, wrappers, cfu_client).await;
+    type_c_service::task::task(service, event_receiver, wrappers).await;
 }
 
 fn main() {

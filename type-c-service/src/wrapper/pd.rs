@@ -5,13 +5,8 @@ use embedded_usb_pd::constants::{T_PS_TRANSITION_EPR_MS, T_PS_TRANSITION_SPR_MS}
 
 use super::*;
 
-impl<
-    'device,
-    M: RawMutex,
-    D: Lockable,
-    S: event::Sender<power_policy_interface::psu::event::EventData>,
-    V: FwOfferValidator,
-> ControllerWrapper<'device, M, D, S, V>
+impl<'device, M: RawMutex, D: Lockable, S: event::Sender<power_policy_interface::psu::event::EventData>>
+    ControllerWrapper<'device, M, D, S>
 where
     D::Inner: Controller,
 {

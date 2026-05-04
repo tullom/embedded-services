@@ -3,7 +3,7 @@
 
 use ::tps6699x::{ADDR1, TPS66994_NUM_PORTS};
 use cfu_service::CfuClient;
-use cfu_service::component::{InternalResponseData, RequestData};
+use cfu_service::component::{CfuDevice, InternalResponseData, RequestData};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_imxrt::gpio::{Input, Inverter, Pull};
@@ -27,8 +27,7 @@ use power_policy_service::psu::PsuEventReceivers;
 use power_policy_service::service::registration::ArrayRegistration;
 use static_cell::StaticCell;
 use tps6699x::asynchronous::embassy as tps6699x;
-use type_c_interface::port::ControllerId;
-use type_c_interface::port::PortRegistration;
+use type_c_interface::port::{ControllerId, PortRegistration};
 use type_c_interface::service::event::PortEvent as ServicePortEvent;
 use type_c_service::bridge::Bridge;
 use type_c_service::bridge::event_receiver::EventReceiver as BridgeEventReceiver;
@@ -47,10 +46,10 @@ bind_interrupts!(struct Irqs {
     FLEXCOMM2 => embassy_imxrt::i2c::InterruptHandler<peripherals::FLEXCOMM2>;
 });
 
-struct Validator;
+struct CfuCustomization;
 
-impl type_c_service::wrapper::FwOfferValidator for Validator {
-    fn validate(&self, _current: FwVersion, _offer: &FwUpdateOffer) -> FwUpdateOfferResponse {
+impl cfu_service::customization::Customization for CfuCustomization {
+    fn validate(&mut self, _current: FwVersion, _offer: &FwUpdateOffer) -> FwUpdateOfferResponse {
         // For this example, we always accept the offer
         FwUpdateOfferResponse::new_accept(HostToken::Driver)
     }
@@ -67,7 +66,6 @@ type Wrapper<'a> = ControllerWrapper<
     GlobalRawMutex,
     Tps6699xMutex<'a>,
     DynamicSender<'a, power_policy_interface::psu::event::EventData>,
-    Validator,
 >;
 type Controller<'a> = tps6699x::controller::Controller<GlobalRawMutex, BusDevice<'a>>;
 type InterruptProcessor<'a> = tps6699x::interrupt::InterruptProcessor<'a, GlobalRawMutex, BusDevice<'a>>;
@@ -92,6 +90,9 @@ type PowerPolicyServiceType = Mutex<
 >;
 
 type ServiceType = Service<'static>;
+type CfuUpdaterSharedStateType = Mutex<GlobalRawMutex, cfu_service::basic::state::SharedState>;
+type CfuUpdaterType<'a> =
+    cfu_service::basic::Updater<'a, Tps6699xMutex<'a>, CfuUpdaterSharedStateType, CfuCustomization>;
 
 const NUM_PD_CONTROLLERS: usize = 1;
 const CONTROLLER0_ID: ControllerId = ControllerId(0);
@@ -124,14 +125,11 @@ async fn pd_controller_task(
         let event = event_receiver.wait_event().await;
 
         let output = wrapper
-            .process_event(
-                &mut event_receiver.sink_ready_timeout,
-                &mut event_receiver.cfu_event_receiver,
-                event,
-            )
+            .process_event(&mut event_receiver.sink_ready_timeout, event)
             .await;
         if let Err(e) = output {
             error!("Error processing event: {:?}", e);
+            continue;
         }
         let output = output.unwrap();
         if let Err(e) = wrapper.finalize(&mut event_receiver.power_proxies, output).await {
@@ -141,19 +139,29 @@ async fn pd_controller_task(
 }
 
 #[embassy_executor::task]
+async fn cfu_updater_task(
+    mut event_receiver: cfu_service::basic::event_receiver::EventReceiver<'static, CfuUpdaterSharedStateType>,
+    mut updater: CfuUpdaterType<'static>,
+) -> ! {
+    loop {
+        let event = event_receiver.wait_next().await;
+        let output = updater.process_event(event).await;
+        event_receiver.finalize(output).await;
+    }
+}
+
+#[embassy_executor::task]
 async fn interrupt_task(mut int_in: Input<'static>, mut interrupt: InterruptProcessor<'static>) {
     tps6699x::task::interrupt_task(&mut int_in, &mut [&mut interrupt]).await;
 }
 
 #[embassy_executor::task]
-async fn fw_update_task() {
+async fn fw_update_task(cfu_client: &'static CfuClient) {
     Timer::after_millis(1000).await;
-    let context = cfu_service::ClientContext::new();
-    let device = context.get_device(CONTROLLER0_CFU_ID).unwrap();
 
     info!("Getting FW version");
-    let response = device
-        .execute_device_request(RequestData::FwVersionRequest)
+    let response = cfu_client
+        .route_request(CONTROLLER0_CFU_ID, RequestData::FwVersionRequest)
         .await
         .unwrap();
     let prev_version = match response {
@@ -165,14 +173,17 @@ async fn fw_update_task() {
     info!("Got version: {:#x}", prev_version);
 
     info!("Giving offer");
-    let offer = device
-        .execute_device_request(RequestData::GiveOffer(FwUpdateOffer::new(
-            HostToken::Driver,
+    let offer = cfu_client
+        .route_request(
             CONTROLLER0_CFU_ID,
-            FwVersion::new(0x211),
-            0,
-            0,
-        )))
+            RequestData::GiveOffer(FwUpdateOffer::new(
+                HostToken::Driver,
+                CONTROLLER0_CFU_ID,
+                FwVersion::new(0x211),
+                0,
+                0,
+            )),
+        )
         .await
         .unwrap();
     info!("Got response: {:?}", offer);
@@ -202,8 +213,8 @@ async fn fw_update_task() {
         };
 
         info!("Sending chunk {} of {}", i + 1, num_chunks);
-        let response = device
-            .execute_device_request(RequestData::GiveContent(request))
+        let response = cfu_client
+            .route_request(CONTROLLER0_CFU_ID, RequestData::GiveContent(request))
             .await
             .unwrap();
         info!("Got response: {:?}", response);
@@ -211,8 +222,8 @@ async fn fw_update_task() {
 
     Timer::after_millis(2000).await;
     info!("Getting FW version");
-    let response = device
-        .execute_device_request(RequestData::FwVersionRequest)
+    let response = cfu_client
+        .route_request(CONTROLLER0_CFU_ID, RequestData::FwVersionRequest)
         .await
         .unwrap();
     let version = match response {
@@ -238,9 +249,8 @@ async fn type_c_service_task(
     service: &'static Mutex<GlobalRawMutex, ServiceType>,
     event_receiver: EventReceiver<'static, PowerPolicyReceiverType>,
     wrappers: [&'static Wrapper<'static>; NUM_PD_CONTROLLERS],
-    cfu_client: &'static CfuClient,
 ) {
-    type_c_service::task::task(service, event_receiver, wrappers, cfu_client).await;
+    type_c_service::task::task(service, event_receiver, wrappers).await;
 }
 
 #[embassy_executor::main]
@@ -292,7 +302,6 @@ async fn main(spawner: Spawner) {
     let storage = STORAGE.init(Storage::new(
         controller_context,
         CONTROLLER0_ID,
-        CONTROLLER0_CFU_ID,
         [
             PortRegistration {
                 id: PORT0_ID,
@@ -344,17 +353,37 @@ async fn main(spawner: Spawner) {
         tps6699x,
         Default::default(),
         Default::default(),
+        "tps6699x_0",
     )));
 
-    static WRAPPER: StaticCell<Wrapper> = StaticCell::new();
-    let wrapper = WRAPPER.init(ControllerWrapper::new(
+    // Create controller CFU device and updater
+    static CFU_DEVICE: StaticCell<CfuDevice> = StaticCell::new();
+    let cfu_device = CFU_DEVICE.init(CfuDevice::new(CONTROLLER0_CFU_ID));
+
+    static CFU_SHARED_STATE: StaticCell<CfuUpdaterSharedStateType> = StaticCell::new();
+    let cfu_shared_state = CFU_SHARED_STATE.init(Mutex::new(cfu_service::basic::state::SharedState::new()));
+
+    let cfu_event_receiver =
+        cfu_service::basic::event_receiver::EventReceiver::new(cfu_device, cfu_shared_state, Default::default());
+
+    let cfu_updater = cfu_service::basic::Updater::new(
         controller_mutex,
+        cfu_shared_state,
         Default::default(),
-        referenced,
-        Validator,
-    ));
+        CONTROLLER0_CFU_ID,
+        CfuCustomization,
+    );
+
+    // Create CFU client
+    static CFU_CLIENT: OnceLock<CfuClient> = OnceLock::new();
+    let cfu_client = CfuClient::new(&CFU_CLIENT).await;
+    cfu_client.register_device(cfu_device).unwrap();
+
     let bridge_receiver = BridgeEventReceiver::new(&referenced.pd_controller);
     let bridge = Bridge::new(controller_mutex, &referenced.pd_controller);
+
+    static WRAPPER: StaticCell<Wrapper> = StaticCell::new();
+    let wrapper = WRAPPER.init(ControllerWrapper::new(controller_mutex, Default::default(), referenced));
 
     // Create power policy service
     // The service is the only receiver and we only use a DynImmediatePublisher, which doesn't take a publisher slot
@@ -383,17 +412,12 @@ async fn main(spawner: Spawner) {
     static TYPE_C_SERVICE: StaticCell<Mutex<GlobalRawMutex, ServiceType>> = StaticCell::new();
     let type_c_service = TYPE_C_SERVICE.init(Mutex::new(Service::create(Default::default(), controller_context)));
 
-    // Spin up CFU service
-    static CFU_CLIENT: OnceLock<CfuClient> = OnceLock::new();
-    let cfu_client = CfuClient::new(&CFU_CLIENT).await;
-
     info!("Spawining type-c service task");
     spawner.spawn(
         type_c_service_task(
             type_c_service,
             EventReceiver::new(controller_context, power_policy_subscriber),
             [wrapper],
-            cfu_client,
         )
         .expect("Failed to spawn type-c service task"),
     );
@@ -416,12 +440,13 @@ async fn main(spawner: Spawner) {
             ArrayPortEventReceivers::new(
                 InterruptReceiver::new(interrupt_receiver),
                 power_event_receivers,
-                &storage.cfu_device,
             ),
             wrapper,
         )
-        .expect("Failed to create pd controller task"),
+        .expect("Failed to create PD controller task"),
     );
 
-    spawner.spawn(fw_update_task().expect("Failed to create fw update task"));
+    spawner.spawn(cfu_updater_task(cfu_event_receiver, cfu_updater).expect("Failed to create CFU updater task"));
+
+    spawner.spawn(fw_update_task(cfu_client).expect("Failed to create fw update task"));
 }
