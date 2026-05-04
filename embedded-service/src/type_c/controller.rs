@@ -11,7 +11,9 @@ use embedded_usb_pd::{
     ado::Ado,
     pdinfo::{AltMode, PowerPathStatus},
     type_c::ConnectionState,
+    vdm::structured::Svid,
 };
+use heapless::Vec;
 
 use super::{ATTN_VDM_LEN, ControllerId, OTHER_VDM_LEN, external};
 use crate::ipc::deferred;
@@ -262,6 +264,66 @@ pub enum TypeCStateMachineState {
     Disabled,
 }
 
+/// Response from the `Discover SVIDs REQ` message and the [`PortCommandData::GetDiscoveredSvids`] command.
+// Could be changed to hold the heapless::Vec directly if they were Copy or if PortResponseData was not Copy
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct DiscoveredSvids {
+    num_sop: usize,
+    sop: [Svid; Self::NUM_SVIDS],
+
+    num_sop_prime: usize,
+    sop_prime: [Svid; Self::NUM_SVIDS],
+}
+
+impl DiscoveredSvids {
+    /// The number of SVIDs that can be reported in a single [`PortResponseData::DiscoveredSvids`] response.
+    const NUM_SVIDS: usize = 8;
+
+    /// Create a new response object from `sop` and `sop_prime`.
+    pub fn new(sop: Vec<Svid, { Self::NUM_SVIDS }>, sop_prime: Vec<Svid, { Self::NUM_SVIDS }>) -> Self {
+        let num_sop = sop.len();
+        let num_sop_prime = sop_prime.len();
+
+        let mut sop_array = [Svid(0); _];
+        for (svid, dest) in sop.into_iter().zip(sop_array.iter_mut()) {
+            *dest = svid;
+        }
+
+        let mut sop_prime_array = [Svid(0); _];
+        for (svid, dest) in sop_prime.into_iter().zip(sop_prime_array.iter_mut()) {
+            *dest = svid;
+        }
+
+        Self {
+            num_sop,
+            sop: sop_array,
+            num_sop_prime,
+            sop_prime: sop_prime_array,
+        }
+    }
+
+    /// Returns the number of SVIDs discovered on the SOP port partner.
+    pub fn number_sop_svids(&self) -> usize {
+        self.num_sop
+    }
+
+    /// Returns an iterator over the SVIDs discovered on the SOP port partner.
+    pub fn svid_sop(&self) -> impl ExactSizeIterator<Item = Svid> {
+        self.sop.iter().copied().take(self.num_sop)
+    }
+
+    /// Returns the number of SVIDs discovered on the SOP' cable plug.
+    pub fn number_sop_prime_svids(&self) -> usize {
+        self.num_sop_prime
+    }
+
+    /// Returns an iterator over the SVIDs discovered on the SOP' cable plug.
+    pub fn svid_sop_prime(&self) -> impl ExactSizeIterator<Item = Svid> {
+        self.sop_prime.iter().copied().take(self.num_sop_prime)
+    }
+}
+
 /// Port-specific command data
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -319,6 +381,14 @@ pub enum PortCommandData {
     },
     /// Set the system power state
     SetSystemPowerState(SystemPowerState),
+    /// Get the port's discovered SVIDs
+    GetDiscoveredSvids,
+    /// Trigger a hard reset on the given port.
+    HardReset,
+    /// Get the response to a Discover Identity command sent to the given port with SOP
+    GetDiscoverIdentitySop,
+    /// Get the response to a Discover Identity command sent to the given port with SOP'
+    GetDiscoverIdentitySopPrime,
 }
 
 /// Port-specific commands
@@ -363,6 +433,12 @@ pub enum PortResponseData {
     DpStatus(DpStatus),
     /// UCSI response
     UcsiResponse(Result<Option<lpm::ResponseData>, PdError>),
+    /// Discovered SVIDs
+    DiscoveredSvids(DiscoveredSvids),
+    /// Discover Identity SOP response
+    DiscoverIdentitySop(embedded_usb_pd::vdm::structured::command::discover_identity::sop::ResponseVdos),
+    /// Discover Identity SOP' response
+    DiscoverIdentitySopPrime(embedded_usb_pd::vdm::structured::command::discover_identity::sop_prime::ResponseVdos),
 }
 
 impl PortResponseData {
@@ -711,6 +787,37 @@ pub trait Controller {
         port: LocalPortId,
         state: SystemPowerState,
     ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
+
+    /// Get the discovered SVIDs for the given port.
+    fn get_discovered_svids(
+        &mut self,
+        port: LocalPortId,
+    ) -> impl Future<Output = Result<DiscoveredSvids, Error<Self::BusError>>>;
+
+    /// Trigger a hard reset on the given port.
+    fn hard_reset(&mut self, port: LocalPortId) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
+
+    /// Get the latest response from the Discover Identity command targeting SOP.
+    fn get_discover_identity_sop_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> impl Future<
+        Output = Result<
+            embedded_usb_pd::vdm::structured::command::discover_identity::sop::ResponseVdos,
+            Error<Self::BusError>,
+        >,
+    >;
+
+    /// Get the latest response from the Discover Identity command targeting SOP'.
+    fn get_discover_identity_sop_prime_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> impl Future<
+        Output = Result<
+            embedded_usb_pd::vdm::structured::command::discover_identity::sop_prime::ResponseVdos,
+            Error<Self::BusError>,
+        >,
+    >;
 }
 
 /// Internal context for managing PD controllers
@@ -769,6 +876,19 @@ pub(super) async fn lookup_controller(controller_id: ControllerId) -> Result<&'s
         .filter_map(|node| node.data::<Device>())
         .find(|controller| controller.id == controller_id)
         .ok_or(PdError::InvalidController)
+}
+
+/// Lookup the controller and local port ID for a given global port ID.
+pub(super) async fn lookup_global_port(
+    port_id: GlobalPortId,
+) -> Result<(&'static Device<'static>, LocalPortId), PdError> {
+    for controller in CONTEXT.controllers.iter_only::<Device>() {
+        if let Ok(local_port) = controller.lookup_local_port(port_id) {
+            return Ok((controller, local_port));
+        }
+    }
+
+    Err(PdError::InvalidPort)
 }
 
 /// Get total number of ports on the system
@@ -1282,6 +1402,65 @@ impl ContextToken {
         {
             PortResponseData::Complete => Ok(()),
             _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Get the discovered SVIDs for the given port.
+    pub async fn get_discovered_svids(&self, port: GlobalPortId) -> Result<DiscoveredSvids, PdError> {
+        match self
+            .send_port_command(port, PortCommandData::GetDiscoveredSvids)
+            .await?
+        {
+            PortResponseData::DiscoveredSvids(svids) => Ok(svids),
+            r => {
+                error!("Invalid response: expected discovered SVIDs, got {:?}", r);
+                Err(PdError::InvalidResponse)
+            }
+        }
+    }
+
+    /// Trigger a hard reset on the given port.
+    pub async fn hard_reset(&self, port: GlobalPortId) -> Result<(), PdError> {
+        match self.send_port_command(port, PortCommandData::HardReset).await? {
+            PortResponseData::Complete => Ok(()),
+            _ => Err(PdError::InvalidResponse),
+        }
+    }
+
+    /// Get the latest response from the Discover Identity command targeting SOP.
+    pub async fn get_discover_identity_sop_response(
+        &self,
+        port: GlobalPortId,
+    ) -> Result<embedded_usb_pd::vdm::structured::command::discover_identity::sop::ResponseVdos, PdError> {
+        match self
+            .send_port_command(port, PortCommandData::GetDiscoverIdentitySop)
+            .await?
+        {
+            PortResponseData::DiscoverIdentitySop(response) => Ok(response),
+            r => {
+                error!("Invalid response: expected Discover Identity SOP response, got {:?}", r);
+                Err(PdError::InvalidResponse)
+            }
+        }
+    }
+
+    /// Get the latest response from the Discover Identity command targeting SOP'.
+    pub async fn get_discover_identity_sop_prime_response(
+        &self,
+        port: GlobalPortId,
+    ) -> Result<embedded_usb_pd::vdm::structured::command::discover_identity::sop_prime::ResponseVdos, PdError> {
+        match self
+            .send_port_command(port, PortCommandData::GetDiscoverIdentitySopPrime)
+            .await?
+        {
+            PortResponseData::DiscoverIdentitySopPrime(response) => Ok(response),
+            r => {
+                error!(
+                    "Invalid response: expected Discover Identity SOP' response, got {:?}",
+                    r
+                );
+                Err(PdError::InvalidResponse)
+            }
         }
     }
 

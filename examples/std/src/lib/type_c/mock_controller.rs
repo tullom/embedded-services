@@ -6,8 +6,9 @@ use embedded_services::{
     power::policy::PowerCapability,
     type_c::{
         controller::{
-            AttnVdm, ControllerStatus, DpConfig, DpPinConfig, DpStatus, OtherVdm, PdStateMachineConfig, PortStatus,
-            RetimerFwUpdateState, SendVdm, SystemPowerState, TbtConfig, TypeCStateMachineState, UsbControlConfig,
+            AttnVdm, ControllerStatus, DiscoveredSvids, DpConfig, DpPinConfig, DpStatus, OtherVdm,
+            PdStateMachineConfig, PortStatus, RetimerFwUpdateState, SendVdm, SystemPowerState, TbtConfig,
+            TypeCStateMachineState, UsbControlConfig,
         },
         event::PortEvent,
     },
@@ -339,6 +340,36 @@ impl embedded_services::type_c::controller::Controller for Controller<'_> {
     ) -> Result<(), Error<Self::BusError>> {
         debug!("Set power state for port {port:?}: {state:?}");
         Ok(())
+    }
+
+    async fn get_discovered_svids(&mut self, port: LocalPortId) -> Result<DiscoveredSvids, Error<Self::BusError>> {
+        debug!("Get discovered SVIDs for port {port:?}");
+        Ok(DiscoveredSvids::default())
+    }
+
+    async fn hard_reset(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
+        debug!("Hard reset for port {port:?}");
+        Ok(())
+    }
+
+    async fn get_discover_identity_sop_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> Result<embedded_usb_pd::vdm::structured::command::discover_identity::sop::ResponseVdos, Error<Self::BusError>>
+    {
+        debug!("Get Discover Identity SOP response for port {port:?}");
+        Err(Error::Pd(PdError::Failed))
+    }
+
+    async fn get_discover_identity_sop_prime_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> Result<
+        embedded_usb_pd::vdm::structured::command::discover_identity::sop_prime::ResponseVdos,
+        Error<Self::BusError>,
+    > {
+        debug!("Get Discover Identity SOP' response for port {port:?}");
+        Err(Error::Pd(PdError::Failed))
     }
 }
 

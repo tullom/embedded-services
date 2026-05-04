@@ -6,7 +6,7 @@ use embedded_usb_pd::{GlobalPortId, LocalPortId, PdError, ucsi};
 use crate::type_c::{
     Cached,
     controller::{
-        PdStateMachineConfig, SystemPowerState, TbtConfig, TypeCStateMachineState, UsbControlConfig,
+        DiscoveredSvids, PdStateMachineConfig, SystemPowerState, TbtConfig, TypeCStateMachineState, UsbControlConfig,
         execute_external_ucsi_command,
     },
 };
@@ -15,7 +15,7 @@ use super::{
     ControllerId,
     controller::{
         ControllerStatus, DpConfig, DpStatus, PortStatus, RetimerFwUpdateState, SendVdm,
-        execute_external_controller_command, execute_external_port_command, lookup_controller,
+        execute_external_controller_command, execute_external_port_command, lookup_controller, lookup_global_port,
     },
 };
 
@@ -103,6 +103,14 @@ pub enum PortCommandData {
     },
     /// Set the system power state
     SetSystemPowerState(SystemPowerState),
+    /// Get the port's discovered SVIDs
+    GetDiscoveredSvids,
+    /// Trigger a hard reset on the given port.
+    HardReset,
+    /// Get the response to a Discover Identity command sent to the given port with SOP
+    GetDiscoverIdentitySop,
+    /// Get the response to a Discover Identity command sent to the given port with SOP'
+    GetDiscoverIdentitySopPrime,
 }
 
 /// Port-specific commands
@@ -127,6 +135,12 @@ pub enum PortResponseData {
     RetimerFwUpdateGetState(RetimerFwUpdateState),
     /// Get DisplayPort status
     GetDpStatus(DpStatus),
+    /// Get the port's discovered SVIDs
+    DiscoveredSvids(DiscoveredSvids),
+    /// Discover Identity response data for SOP
+    DiscoverIdentitySop(embedded_usb_pd::vdm::structured::command::discover_identity::sop::ResponseVdos),
+    /// Discover Identity response data for SOP'
+    DiscoverIdentitySopPrime(embedded_usb_pd::vdm::structured::command::discover_identity::sop_prime::ResponseVdos),
 }
 
 /// Port-specific command response
@@ -245,6 +259,12 @@ pub async fn controller_port_to_global_id(
     port_id: LocalPortId,
 ) -> Result<GlobalPortId, PdError> {
     lookup_controller(controller_id).await?.lookup_global_port(port_id)
+}
+
+/// Convert a global port ID to a (controller ID, local port ID)
+pub async fn global_port_to_controller_port(global_port: GlobalPortId) -> Result<(ControllerId, LocalPortId), PdError> {
+    let (controller, local_port) = lookup_global_port(global_port).await?;
+    Ok((controller.id(), local_port))
 }
 
 /// Get the retimer fw update status of the given port
@@ -498,6 +518,62 @@ pub async fn set_type_c_state_machine_config(port: GlobalPortId, state: TypeCSta
     .await?
     {
         PortResponseData::Complete => Ok(()),
+        _ => Err(PdError::InvalidResponse),
+    }
+}
+
+/// Get the port's discovered SVIDs
+pub async fn get_discovered_svids(port: GlobalPortId) -> Result<DiscoveredSvids, PdError> {
+    match execute_external_port_command(Command::Port(PortCommand {
+        port,
+        data: PortCommandData::GetDiscoveredSvids,
+    }))
+    .await?
+    {
+        PortResponseData::DiscoveredSvids(svids) => Ok(svids),
+        _ => Err(PdError::InvalidResponse),
+    }
+}
+
+/// Trigger a hard reset on the given port
+pub async fn hard_reset(port: GlobalPortId) -> Result<(), PdError> {
+    match execute_external_port_command(Command::Port(PortCommand {
+        port,
+        data: PortCommandData::HardReset,
+    }))
+    .await?
+    {
+        PortResponseData::Complete => Ok(()),
+        _ => Err(PdError::InvalidResponse),
+    }
+}
+
+/// Get the response to a Discover Identity command sent to the given port with SOP.
+pub async fn get_discover_identity_sop_response(
+    port: GlobalPortId,
+) -> Result<embedded_usb_pd::vdm::structured::command::discover_identity::sop::ResponseVdos, PdError> {
+    match execute_external_port_command(Command::Port(PortCommand {
+        port,
+        data: PortCommandData::GetDiscoverIdentitySop,
+    }))
+    .await?
+    {
+        PortResponseData::DiscoverIdentitySop(vdos) => Ok(vdos),
+        _ => Err(PdError::InvalidResponse),
+    }
+}
+
+/// Get the response to a Discover Identity command sent to the given port with SOP'.
+pub async fn get_discover_identity_sop_prime_response(
+    port: GlobalPortId,
+) -> Result<embedded_usb_pd::vdm::structured::command::discover_identity::sop_prime::ResponseVdos, PdError> {
+    match execute_external_port_command(Command::Port(PortCommand {
+        port,
+        data: PortCommandData::GetDiscoverIdentitySopPrime,
+    }))
+    .await?
+    {
+        PortResponseData::DiscoverIdentitySopPrime(vdos) => Ok(vdos),
         _ => Err(PdError::InvalidResponse),
     }
 }
