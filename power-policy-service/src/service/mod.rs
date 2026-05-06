@@ -8,8 +8,7 @@ pub mod registration;
 pub mod task;
 
 use embedded_services::named::Named;
-use embedded_services::trace;
-use embedded_services::{error, event::Sender, info, sync::Lockable};
+use embedded_services::{event::Sender, info, sync::Lockable, trace};
 
 use power_policy_interface::charger::{Charger, PsuState};
 use power_policy_interface::{
@@ -92,20 +91,11 @@ impl<'device, Reg: Registration<'device>> Service<'device, Reg> {
     }
 
     async fn process_notify_attach(&self, device: &'device Reg::Psu) {
-        let mut device = device.lock().await;
-        info!("({}): Received notify attached", device.name());
-        if let Err(e) = device.state_mut().attach() {
-            error!("({}): Invalid state for attach: {:#?}", device.name(), e);
-        }
+        info!("({}): Received notify attached", device.lock().await.name());
     }
 
     async fn process_notify_detach(&mut self, device: &'device Reg::Psu) -> Result<(), Error> {
-        {
-            let mut device = device.lock().await;
-            info!("({}): Received notify detached", device.name());
-            device.state_mut().detach();
-        }
-
+        info!("({}): Received notify detached", device.lock().await.name());
         self.post_provider_removed(device).await;
         self.update_current_consumer().await?;
         Ok(())
@@ -116,21 +106,11 @@ impl<'device, Reg: Registration<'device>> Service<'device, Reg> {
         device: &'device Reg::Psu,
         capability: Option<ConsumerPowerCapability>,
     ) -> Result<(), Error> {
-        {
-            let mut device = device.lock().await;
-            info!(
-                "({}): Received notify consumer capability: {:#?}",
-                device.name(),
-                capability,
-            );
-            if let Err(e) = device.state_mut().update_consumer_power_capability(capability) {
-                error!(
-                    "({}): Invalid state for notify consumer capability, catching up: {:#?}",
-                    device.name(),
-                    e,
-                );
-            }
-        }
+        info!(
+            "({}): Received notify consumer capability: {:#?}",
+            device.lock().await.name(),
+            capability,
+        );
 
         self.update_current_consumer().await
     }
@@ -140,42 +120,17 @@ impl<'device, Reg: Registration<'device>> Service<'device, Reg> {
         requester: &'device Reg::Psu,
         capability: Option<ProviderPowerCapability>,
     ) -> Result<(), Error> {
-        {
-            let mut requester = requester.lock().await;
-            info!(
-                "({}): Received request provider capability: {:#?}",
-                requester.name(),
-                capability,
-            );
-            if let Err(e) = requester
-                .state_mut()
-                .update_requested_provider_power_capability(capability)
-            {
-                error!(
-                    "({}): Invalid state for notify provider capability, catching up: {:#?}",
-                    requester.name(),
-                    e,
-                );
-            }
-        }
+        info!(
+            "({}): Received request provider capability: {:#?}",
+            requester.lock().await.name(),
+            capability,
+        );
 
         self.connect_provider(requester).await
     }
 
     async fn process_notify_disconnect(&mut self, device: &'device Reg::Psu) -> Result<(), Error> {
-        {
-            let mut locked_device = device.lock().await;
-            info!("({}): Received notify disconnect", locked_device.name());
-
-            if let Err(e) = locked_device.state_mut().disconnect(true) {
-                error!(
-                    "({}): Invalid state for notify disconnect, catching up: {:#?}",
-                    locked_device.name(),
-                    e,
-                );
-            }
-        }
-
+        info!("({}): Received notify disconnect", device.lock().await.name());
         self.post_provider_removed(device).await;
         self.update_current_consumer().await?;
         Ok(())

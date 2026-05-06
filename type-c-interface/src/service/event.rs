@@ -3,16 +3,28 @@
 use embedded_usb_pd::{GlobalPortId, ado::Ado};
 
 use crate::port::{
-    PortStatus,
+    DpStatus, PortStatus,
     event::{PortStatusEventBitfield, VdmData},
 };
+
+/// Struct containing data for a [`PortEventData::StatusChanged`] event
+#[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct StatusChangedData {
+    /// Status changed event
+    pub status_event: PortStatusEventBitfield,
+    /// Previous port status
+    pub previous_status: PortStatus,
+    /// Current port status
+    pub current_status: PortStatus,
+}
 
 /// Enum to contain all port event variants
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum PortEventData {
     /// Port status change events
-    StatusChanged(PortStatusEventBitfield, PortStatus),
+    StatusChanged(StatusChangedData),
     /// PD alert
     Alert(Ado),
     /// VDM
@@ -22,7 +34,7 @@ pub enum PortEventData {
     /// USB mux error recovery
     UsbMuxErrorRecovery,
     /// DP status update
-    DpStatusUpdate,
+    DpStatusUpdate(DpStatus),
 }
 
 /// Struct containing a complete port event

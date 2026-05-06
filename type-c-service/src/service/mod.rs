@@ -133,8 +133,9 @@ impl<'a> Service<'a> {
 
     async fn process_port_event(&mut self, event: &PortEvent) -> Result<(), Error> {
         match &event.event {
-            PortEventData::StatusChanged(status_event, status) => {
-                self.process_port_status_event(event.port, *status_event, *status).await
+            PortEventData::StatusChanged(status_event) => {
+                self.process_port_status_event(event.port, status_event.status_event, status_event.current_status)
+                    .await
             }
             unhandled => {
                 // Currently just log notifications, but may want to do more in the future

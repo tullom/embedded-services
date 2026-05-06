@@ -334,9 +334,9 @@ dependencies = [
 
 [[package]]
 name = "device-driver"
-version = "1.0.8"
+version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aa3d97b2acf349b9d52c75470e2ccfc7224c49597ec12c2fb0e28826e910495"
+checksum = "c2e4547bd66511372d2a38ac3c1b2892c7ebf83cf0d5411c3406e496c85a1d96"
 dependencies = [
  "defmt 0.3.100",
  "embedded-io 0.6.1",
@@ -676,7 +676,7 @@ dependencies = [
 [[package]]
 name = "embedded-usb-pd"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-usb-pd#1a8e79d3a2ac0d2837a34b045087cf0863146f7d"
+source = "git+https://github.com/OpenDevicePartnership/embedded-usb-pd#21d0e228d21ddc6ccaeffc01d98ef9a5b87941ef"
 dependencies = [
  "aquamarine",
  "bincode",
@@ -1427,7 +1427,7 @@ dependencies = [
 [[package]]
 name = "tps6699x"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/tps6699x?branch=v0.2.0#c908a50747e8fcce831d4e53026072b5b6916a7b"
+source = "git+https://github.com/OpenDevicePartnership/tps6699x?branch=v0.2.0#abe5568183bfe5fb2ea81806dded6cb60f3f9b58"
 dependencies = [
  "bincode",
  "bitfield 0.19.4",

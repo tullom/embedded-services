@@ -871,21 +871,11 @@ bitfield! {
     pub u32, ti_fw_version, set_ti_fw_version: 63, 32;
 }
 
-pub struct InterruptReceiver<'a, M: RawMutex, BUS: I2c> {
-    interrupt_receiver: interrupt::InterruptReceiver<'a, M, BUS>,
-}
-
-impl<'a, M: RawMutex, BUS: I2c> InterruptReceiver<'a, M, BUS> {
-    pub fn new(interrupt_receiver: interrupt::InterruptReceiver<'a, M, BUS>) -> Self {
-        Self { interrupt_receiver }
-    }
-}
-
-impl<'a, M: RawMutex, BUS: I2c> crate::wrapper::event_receiver::InterruptReceiver<MAX_SUPPORTED_PORTS>
-    for InterruptReceiver<'a, M, BUS>
+impl<'a, M: RawMutex, BUS: I2c> crate::controller::event_receiver::InterruptReceiver<MAX_SUPPORTED_PORTS>
+    for interrupt::InterruptReceiver<'a, M, BUS>
 {
     async fn wait_interrupt(&mut self) -> [PortEventBitfield; MAX_SUPPORTED_PORTS] {
-        let interrupts = self.interrupt_receiver.wait_any(false).await;
+        let interrupts = self.wait_any(false).await;
         let mut port_events = [PortEventBitfield::none(); MAX_SUPPORTED_PORTS];
         for (interrupt, event) in zip(interrupts.iter(), port_events.iter_mut()) {
             if *interrupt == IntEventBus1::new_zero() {

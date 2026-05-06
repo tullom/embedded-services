@@ -1,10 +1,10 @@
 #![no_std]
 pub mod bridge;
+pub mod controller;
 pub mod driver;
 pub mod service;
 pub mod task;
 pub mod util;
-pub mod wrapper;
 
 use core::iter::Enumerate;
 

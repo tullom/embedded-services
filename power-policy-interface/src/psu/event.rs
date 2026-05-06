@@ -34,28 +34,3 @@ where
     /// Event data
     pub event: EventData,
 }
-
-/// Data for a power policy response
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum ResponseData {
-    /// The request was completed successfully
-    Complete,
-}
-
-impl ResponseData {
-    /// Returns an InvalidResponse error if the response is not complete
-    pub fn complete_or_err(self) -> Result<(), super::Error> {
-        match self {
-            ResponseData::Complete => Ok(()),
-        }
-    }
-}
-
-/// Response from the power policy service
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Response {
-    /// Response data
-    pub data: ResponseData,
-}
