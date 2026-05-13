@@ -6,7 +6,8 @@ use embedded_services::GlobalRawMutex;
 use embedded_usb_pd::{GlobalPortId, PdError as Error};
 use log::*;
 use static_cell::StaticCell;
-use type_c_interface::port::{self, ControllerId, PortRegistration};
+use type_c_interface::controller::ControllerId;
+use type_c_interface::port::{self, PortRegistration};
 use type_c_interface::service::context::{Context, DeviceContainer};
 use type_c_interface::service::event::PortEvent as ServicePortEvent;
 
@@ -16,7 +17,7 @@ const PORT1_ID: GlobalPortId = GlobalPortId(1);
 const CHANNEL_CAPACITY: usize = 4;
 
 mod test_controller {
-    use type_c_interface::port::{ControllerStatus, PortRegistration};
+    use type_c_interface::port::PortRegistration;
 
     use super::*;
 
@@ -40,20 +41,11 @@ mod test_controller {
         async fn process_controller_command(
             &self,
             command: port::InternalCommandData,
-        ) -> Result<port::InternalResponseData<'static>, Error> {
+        ) -> Result<port::InternalResponseData, Error> {
             match command {
                 port::InternalCommandData::Reset => {
                     info!("Reset controller");
                     Ok(port::InternalResponseData::Complete)
-                }
-                port::InternalCommandData::Status => {
-                    info!("Get controller status");
-                    Ok(port::InternalResponseData::Status(ControllerStatus {
-                        mode: "Test",
-                        valid_fw_bank: true,
-                        fw_version0: 0xbadf00d,
-                        fw_version1: 0xdeadbeef,
-                    }))
                 }
                 port::InternalCommandData::SyncState => {
                     info!("Sync controller state");
@@ -122,9 +114,6 @@ async fn task(spawner: Spawner) {
     Timer::after_secs(1).await;
 
     controller_context.reset_controller(CONTROLLER0_ID).await.unwrap();
-
-    let status = controller_context.get_controller_status(CONTROLLER0_ID).await.unwrap();
-    info!("Controller 0 status: {status:#?}");
 }
 
 fn main() {

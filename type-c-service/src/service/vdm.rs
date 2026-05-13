@@ -1,7 +1,7 @@
 //! VDM (Vendor Defined Messages) related functionality.
 
 use embedded_usb_pd::{GlobalPortId, PdError};
-use type_c_interface::port::{AttnVdm, OtherVdm};
+use type_c_interface::control::vdm::{AttnVdm, OtherVdm};
 
 use super::Service;
 

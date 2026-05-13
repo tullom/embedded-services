@@ -2,18 +2,22 @@ use std::num::NonZeroU8;
 
 use embassy_sync::{channel, mutex::Mutex, signal::Signal};
 use embedded_services::GlobalRawMutex;
-use embedded_usb_pd::{Error, ado::Ado};
+use embedded_usb_pd::ado::Ado;
 use embedded_usb_pd::{LocalPortId, PdError};
 use embedded_usb_pd::{PowerRole, type_c::Current};
 use embedded_usb_pd::{type_c::ConnectionState, ucsi::lpm};
 use log::{debug, info};
 
 use power_policy_interface::capability::PowerCapability;
-use type_c_interface::port::SystemPowerState;
-use type_c_interface::port::{
-    AttnVdm, ControllerStatus, DpConfig, DpPinConfig, DpStatus, OtherVdm, PdStateMachineConfig, PortStatus,
-    RetimerFwUpdateState, SendVdm, TbtConfig, TypeCStateMachineState, UsbControlConfig, event::PortEventBitfield,
-};
+use type_c_interface::control::dp::{DpConfig, DpPinConfig, DpStatus};
+use type_c_interface::control::pd::{PdStateMachineConfig, PortStatus};
+use type_c_interface::control::power::SystemPowerState;
+use type_c_interface::control::retimer::RetimerFwUpdateState;
+use type_c_interface::control::tbt::TbtConfig;
+use type_c_interface::control::type_c::TypeCStateMachineState;
+use type_c_interface::control::usb::UsbControlConfig;
+use type_c_interface::control::vdm::{AttnVdm, OtherVdm, SendVdm};
+use type_c_interface::port::event::PortEventBitfield;
 use type_c_service::controller::state::SharedState;
 use type_c_service::util::power_capability_from_current;
 
@@ -129,58 +133,25 @@ impl<const N: usize> type_c_service::controller::event_receiver::InterruptReceiv
     }
 }
 
-impl type_c_interface::port::Controller for Controller<'_> {
-    type BusError = ();
+impl type_c_interface::controller::Controller for Controller<'_> {
+    async fn reset_controller(&mut self) -> Result<(), PdError> {
+        debug!("Reset controller");
+        Ok(())
+    }
+}
 
-    async fn get_port_status(&mut self, _port: LocalPortId) -> Result<PortStatus, Error<Self::BusError>> {
+impl type_c_interface::controller::pd::Pd for Controller<'_> {
+    async fn get_port_status(&mut self, _port: LocalPortId) -> Result<PortStatus, PdError> {
         debug!("Get port status: {:#?}", *self.state.status.lock().await);
         Ok(*self.state.status.lock().await)
     }
 
-    async fn enable_sink_path(&mut self, _port: LocalPortId, enable: bool) -> Result<(), Error<Self::BusError>> {
+    async fn enable_sink_path(&mut self, _port: LocalPortId, enable: bool) -> Result<(), PdError> {
         debug!("Enable sink path: {enable}");
         Ok(())
     }
 
-    async fn get_controller_status(&mut self) -> Result<ControllerStatus<'static>, Error<Self::BusError>> {
-        debug!("Get controller status");
-        Ok(ControllerStatus {
-            mode: "Test",
-            valid_fw_bank: true,
-            fw_version0: 0xbadf00d,
-            fw_version1: 0xdeadbeef,
-        })
-    }
-
-    async fn reset_controller(&mut self) -> Result<(), Error<Self::BusError>> {
-        debug!("Reset controller");
-        Ok(())
-    }
-
-    async fn get_rt_fw_update_status(
-        &mut self,
-        _port: LocalPortId,
-    ) -> Result<RetimerFwUpdateState, Error<Self::BusError>> {
-        debug!("Get retimer fw update status");
-        Ok(RetimerFwUpdateState::Inactive)
-    }
-
-    async fn set_rt_fw_update_state(&mut self, _port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        debug!("Set retimer fw update state");
-        Ok(())
-    }
-
-    async fn clear_rt_fw_update_state(&mut self, _port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        debug!("Clear retimer fw update state");
-        Ok(())
-    }
-
-    async fn set_rt_compliance(&mut self, _port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        debug!("Set retimer compliance");
-        Ok(())
-    }
-
-    async fn get_pd_alert(&mut self, port: LocalPortId) -> Result<Option<Ado>, Error<Self::BusError>> {
+    async fn get_pd_alert(&mut self, port: LocalPortId) -> Result<Option<Ado>, PdError> {
         let pd_alert = self.state.pd_alert.lock().await;
         if let Some(ado) = *pd_alert {
             debug!("Port{}: Get PD alert: {ado:#?}", port.0);
@@ -191,54 +162,32 @@ impl type_c_interface::port::Controller for Controller<'_> {
         }
     }
 
-    async fn set_unconstrained_power(
-        &mut self,
-        _port: LocalPortId,
-        unconstrained: bool,
-    ) -> Result<(), Error<Self::BusError>> {
+    async fn set_unconstrained_power(&mut self, _port: LocalPortId, unconstrained: bool) -> Result<(), PdError> {
         debug!("Set unconstrained power: {unconstrained}");
         Ok(())
     }
 
-    async fn set_max_sink_voltage(
-        &mut self,
-        port: LocalPortId,
-        voltage_mv: Option<u16>,
-    ) -> Result<(), Error<Self::BusError>> {
-        debug!("Set max sink voltage for port {}: {:?}", port.0, voltage_mv);
-        Ok(())
-    }
-
-    async fn reconfigure_retimer(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
-        debug!("reconfigure_retimer(port: {port:?})");
-        Ok(())
-    }
-
-    async fn clear_dead_battery_flag(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
+    async fn clear_dead_battery_flag(&mut self, port: LocalPortId) -> Result<(), PdError> {
         debug!("clear_dead_battery_flag(port: {port:?})");
         Ok(())
     }
 
-    async fn get_other_vdm(&mut self, port: LocalPortId) -> Result<OtherVdm, Error<Self::BusError>> {
+    async fn get_other_vdm(&mut self, port: LocalPortId) -> Result<OtherVdm, PdError> {
         debug!("Get other VDM for port {port:?}");
         Ok(OtherVdm::default())
     }
 
-    async fn get_attn_vdm(&mut self, port: LocalPortId) -> Result<AttnVdm, Error<Self::BusError>> {
+    async fn get_attn_vdm(&mut self, port: LocalPortId) -> Result<AttnVdm, PdError> {
         debug!("Get attention VDM for port {port:?}");
         Ok(AttnVdm::default())
     }
 
-    async fn send_vdm(&mut self, port: LocalPortId, tx_vdm: SendVdm) -> Result<(), Error<Self::BusError>> {
+    async fn send_vdm(&mut self, port: LocalPortId, tx_vdm: SendVdm) -> Result<(), PdError> {
         debug!("Send VDM for port {port:?}: {tx_vdm:?}");
         Ok(())
     }
 
-    async fn set_usb_control(
-        &mut self,
-        port: LocalPortId,
-        config: UsbControlConfig,
-    ) -> Result<(), Error<Self::BusError>> {
+    async fn set_usb_control(&mut self, port: LocalPortId, config: UsbControlConfig) -> Result<(), PdError> {
         debug!(
             "set_usb_control(port: {port:?}, usb2: {}, usb3: {}, usb4: {})",
             config.usb2_enabled, config.usb3_enabled, config.usb4_enabled
@@ -246,7 +195,7 @@ impl type_c_interface::port::Controller for Controller<'_> {
         Ok(())
     }
 
-    async fn get_dp_status(&mut self, port: LocalPortId) -> Result<DpStatus, Error<Self::BusError>> {
+    async fn get_dp_status(&mut self, port: LocalPortId) -> Result<DpStatus, PdError> {
         debug!("Get DisplayPort status for port {port:?}");
         Ok(DpStatus {
             alt_mode_entered: false,
@@ -254,7 +203,7 @@ impl type_c_interface::port::Controller for Controller<'_> {
         })
     }
 
-    async fn set_dp_config(&mut self, port: LocalPortId, config: DpConfig) -> Result<(), Error<Self::BusError>> {
+    async fn set_dp_config(&mut self, port: LocalPortId, config: DpConfig) -> Result<(), PdError> {
         debug!(
             "Set DisplayPort config for port {port:?}: enable={}, pin_cfg={:?}",
             config.enable, config.dfp_d_pin_cfg
@@ -262,62 +211,103 @@ impl type_c_interface::port::Controller for Controller<'_> {
         Ok(())
     }
 
-    async fn execute_drst(&mut self, port: LocalPortId) -> Result<(), Error<Self::BusError>> {
+    async fn execute_drst(&mut self, port: LocalPortId) -> Result<(), PdError> {
         debug!("Execute PD Data Reset for port {port:?}");
         Ok(())
     }
 
-    async fn set_tbt_config(&mut self, port: LocalPortId, config: TbtConfig) -> Result<(), Error<Self::BusError>> {
+    async fn set_tbt_config(&mut self, port: LocalPortId, config: TbtConfig) -> Result<(), PdError> {
         debug!("Set Thunderbolt config for port {port:?}: {config:?}");
         Ok(())
     }
+}
 
+impl type_c_interface::controller::max_sink_voltage::MaxSinkVoltage for Controller<'_> {
+    async fn set_max_sink_voltage(&mut self, port: LocalPortId, voltage_mv: Option<u16>) -> Result<(), PdError> {
+        debug!("Set max sink voltage for port {}: {:?}", port.0, voltage_mv);
+        Ok(())
+    }
+}
+
+impl type_c_interface::controller::pd::StateMachine for Controller<'_> {
     async fn set_pd_state_machine_config(
         &mut self,
         port: LocalPortId,
         config: PdStateMachineConfig,
-    ) -> Result<(), Error<Self::BusError>> {
+    ) -> Result<(), PdError> {
         debug!("Set PD State Machine config for port {port:?}: {config:?}");
         Ok(())
     }
+}
 
+impl type_c_interface::controller::type_c::StateMachine for Controller<'_> {
     async fn set_type_c_state_machine_config(
         &mut self,
         port: LocalPortId,
         state: TypeCStateMachineState,
-    ) -> Result<(), Error<Self::BusError>> {
+    ) -> Result<(), PdError> {
         debug!("Set Type-C State Machine state for port {port:?}: {state:?}");
         Ok(())
     }
+}
 
-    async fn execute_ucsi_command(
-        &mut self,
-        command: lpm::LocalCommand,
-    ) -> Result<Option<lpm::ResponseData>, Error<Self::BusError>> {
+impl type_c_interface::ucsi::Lpm for Controller<'_> {
+    async fn execute_lpm_command(&mut self, command: lpm::LocalCommand) -> Result<Option<lpm::ResponseData>, PdError> {
         debug!("Execute UCSI command for port {:?}: {command:?}", command.port());
         match command.operation() {
             lpm::CommandData::GetConnectorStatus => Ok(Some(lpm::ResponseData::GetConnectorStatus(
                 lpm::get_connector_status::ResponseData::default(),
             ))),
-            _ => Err(PdError::UnrecognizedCommand.into()),
+            _ => Err(PdError::UnrecognizedCommand),
         }
     }
+}
 
+impl type_c_interface::controller::electrical_disconnect::ElectricalDisconnect for Controller<'_> {
     async fn execute_electrical_disconnect(
         &mut self,
         port: LocalPortId,
         reconnect_time_s: Option<NonZeroU8>,
-    ) -> Result<(), Error<Self::BusError>> {
+    ) -> Result<(), PdError> {
         debug!("Execute electrical disconnect for port {port:?} with reconnect time {reconnect_time_s:?}");
         Ok(())
     }
+}
 
-    async fn set_power_state(
+impl type_c_interface::controller::power::SystemPowerStateStatus for Controller<'_> {
+    async fn set_system_power_state_status(
         &mut self,
         port: LocalPortId,
         state: SystemPowerState,
-    ) -> Result<(), Error<Self::BusError>> {
-        debug!("Set power state for port {port:?}: {state:?}");
+    ) -> Result<(), PdError> {
+        debug!("Set system power state for port {port:?}: {state:?}");
+        Ok(())
+    }
+}
+
+impl type_c_interface::controller::retimer::Retimer for Controller<'_> {
+    async fn get_rt_fw_update_status(&mut self, _port: LocalPortId) -> Result<RetimerFwUpdateState, PdError> {
+        debug!("Get retimer fw update status");
+        Ok(RetimerFwUpdateState::Inactive)
+    }
+
+    async fn set_rt_fw_update_state(&mut self, _port: LocalPortId) -> Result<(), PdError> {
+        debug!("Set retimer fw update state");
+        Ok(())
+    }
+
+    async fn clear_rt_fw_update_state(&mut self, _port: LocalPortId) -> Result<(), PdError> {
+        debug!("Clear retimer fw update state");
+        Ok(())
+    }
+
+    async fn set_rt_compliance(&mut self, _port: LocalPortId) -> Result<(), PdError> {
+        debug!("Set retimer compliance");
+        Ok(())
+    }
+
+    async fn reconfigure_retimer(&mut self, port: LocalPortId) -> Result<(), PdError> {
+        debug!("reconfigure_retimer(port: {port:?})");
         Ok(())
     }
 }

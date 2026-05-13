@@ -1,14 +1,14 @@
 use embedded_services::{GlobalRawMutex, ipc::deferred};
 use type_c_interface::port;
 
-pub type ControllerCommand<'a> = deferred::Request<'a, GlobalRawMutex, port::Command, port::Response<'static>>;
+pub type ControllerCommand<'a> = deferred::Request<'a, GlobalRawMutex, port::Command, port::Response>;
 
 /// Controller command output data
 pub struct OutputControllerCommand<'a> {
     /// Controller request
     pub request: ControllerCommand<'a>,
     /// Response
-    pub response: port::Response<'static>,
+    pub response: port::Response,
 }
 
 pub struct EventReceiver {

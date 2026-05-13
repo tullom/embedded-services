@@ -17,7 +17,7 @@ use power_policy_service::service::registration::ArrayRegistration;
 use static_cell::StaticCell;
 use std_examples::type_c::mock_controller::Port;
 use std_examples::type_c::mock_controller::{self, InterruptReceiver};
-use type_c_interface::port::ControllerId;
+use type_c_interface::controller::ControllerId;
 use type_c_interface::port::Device;
 use type_c_interface::port::PortRegistration;
 use type_c_interface::port::event::PortEventBitfield;

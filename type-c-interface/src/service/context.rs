@@ -2,11 +2,17 @@ use embassy_time::{Duration, with_timeout};
 use embedded_usb_pd::ucsi::lpm;
 use embedded_usb_pd::{GlobalPortId, PdError};
 
-use crate::port::ControllerId;
+use crate::control::dp::{DpConfig, DpStatus};
+use crate::control::pd::PdStateMachineConfig;
+use crate::control::retimer::RetimerFwUpdateState;
+use crate::control::tbt::TbtConfig;
+use crate::control::type_c::TypeCStateMachineState;
+use crate::control::usb::UsbControlConfig;
+use crate::control::vdm::{AttnVdm, OtherVdm, SendVdm};
+use crate::controller::ControllerId;
 use crate::port::{
-    AttnVdm, Command, ControllerStatus, Device, DpConfig, DpStatus, InternalCommandData, InternalResponseData,
-    OtherVdm, PdStateMachineConfig, PortCommand, PortCommandData, PortResponseData, Response, RetimerFwUpdateState,
-    SendVdm, TbtConfig, TypeCStateMachineState, UsbControlConfig,
+    Command, Device, InternalCommandData, InternalResponseData, PortCommand, PortCommandData, PortResponseData,
+    Response,
 };
 use crate::service;
 use crate::service::event::{Event, PortEvent};
@@ -58,7 +64,7 @@ impl Context {
         &self,
         controller_id: ControllerId,
         command: InternalCommandData,
-    ) -> Result<InternalResponseData<'static>, PdError> {
+    ) -> Result<InternalResponseData, PdError> {
         let node = self
             .controllers
             .into_iter()
@@ -90,7 +96,7 @@ impl Context {
         &self,
         controller_id: ControllerId,
         command: InternalCommandData,
-    ) -> Result<InternalResponseData<'static>, PdError> {
+    ) -> Result<InternalResponseData, PdError> {
         match with_timeout(
             DEFAULT_TIMEOUT,
             self.send_controller_command_no_timeout(controller_id, command),
@@ -238,23 +244,6 @@ impl Context {
         }
     }
 
-    /// Get current controller status
-    pub async fn get_controller_status(
-        &self,
-        controller_id: ControllerId,
-    ) -> Result<ControllerStatus<'static>, PdError> {
-        match self
-            .send_controller_command(controller_id, InternalCommandData::Status)
-            .await?
-        {
-            InternalResponseData::Status(status) => Ok(status),
-            r => {
-                error!("Invalid response: expected controller status, got {:?}", r);
-                Err(PdError::InvalidResponse)
-            }
-        }
-    }
-
     /// Set unconstrained power for the given port
     pub async fn set_unconstrained_power(&self, port: GlobalPortId, unconstrained: bool) -> Result<(), PdError> {
         match self
@@ -273,10 +262,6 @@ impl Context {
             .await?
         {
             InternalResponseData::Complete => Ok(()),
-            r => {
-                error!("Invalid response: expected controller status, got {:?}", r);
-                Err(PdError::InvalidResponse)
-            }
         }
     }
 

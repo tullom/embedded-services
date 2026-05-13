@@ -2,9 +2,9 @@
 
 use embedded_usb_pd::{GlobalPortId, ado::Ado};
 
-use crate::port::{
-    DpStatus, PortStatus,
-    event::{PortStatusEventBitfield, VdmData},
+use crate::{
+    control::{dp::DpStatus, pd::PortStatus},
+    port::event::{PortStatusEventBitfield, VdmData},
 };
 
 /// Struct containing data for a [`PortEventData::StatusChanged`] event

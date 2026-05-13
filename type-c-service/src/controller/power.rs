@@ -9,25 +9,22 @@ use power_policy_interface::{
     capability::{ConsumerPowerCapability, ProviderPowerCapability, PsuType},
     psu::{Error as PsuError, Psu, State},
 };
-use type_c_interface::port::Controller;
+use type_c_interface::controller::power::SystemPowerStateStatus;
 
-use crate::{controller::config::UnconstrainedSink, util::power_policy_error_from_pd_bus_error};
+use crate::{controller::config::UnconstrainedSink, util::power_policy_error_from_pd_error};
 
 use super::*;
 
 impl<
     'device,
-    C: Lockable<Inner: Controller>,
+    C: Lockable<Inner: Pd>,
     Shared: Lockable<Inner = SharedState>,
     PowerSender: Sender<power_policy_interface::psu::event::EventData>,
     LoopbackSender: Sender<event::Loopback>,
 > Port<'device, C, Shared, PowerSender, LoopbackSender>
 {
     /// Handle a new contract as consumer
-    pub(super) async fn process_new_consumer_contract(
-        &mut self,
-        new_status: &PortStatus,
-    ) -> Result<(), Error<<C::Inner as Controller>::BusError>> {
+    pub(super) async fn process_new_consumer_contract(&mut self, new_status: &PortStatus) -> Result<(), PdError> {
         info!("Process new consumer contract");
         let available_sink_contract = new_status.available_sink_contract.map(|c| {
             let mut c: ConsumerPowerCapability = c.into();
@@ -43,7 +40,7 @@ impl<
 
         if let Err(e) = self.psu_state.update_consumer_power_capability(available_sink_contract) {
             error!("Failed to update consumer power capability: {:?}", e);
-            return Err(Error::Pd(PdError::Failed));
+            return Err(PdError::Failed);
         }
         self.power_policy_sender
             .send(power_policy_interface::psu::event::EventData::UpdatedConsumerCapability(available_sink_contract))
@@ -52,10 +49,7 @@ impl<
     }
 
     /// Handle a new contract as provider
-    pub(super) async fn process_new_provider_contract(
-        &mut self,
-        new_status: &PortStatus,
-    ) -> Result<(), Error<<C::Inner as Controller>::BusError>> {
+    pub(super) async fn process_new_provider_contract(&mut self, new_status: &PortStatus) -> Result<(), PdError> {
         info!("Process New provider contract");
         let capability = new_status.available_source_contract.map(|caps| {
             let mut caps = ProviderPowerCapability::from(caps);
@@ -64,7 +58,7 @@ impl<
         });
         if let Err(e) = self.psu_state.update_requested_provider_power_capability(capability) {
             error!("Failed to update requested provider power capability: {:?}", e);
-            return Err(Error::Pd(PdError::Failed));
+            return Err(PdError::Failed);
         }
         self.power_policy_sender
             .send(power_policy_interface::psu::event::EventData::RequestedProviderCapability(capability))
@@ -118,7 +112,7 @@ impl<
 
 impl<
     'device,
-    C: Lockable<Inner: Controller>,
+    C: Lockable<Inner: Pd>,
     Shared: Lockable<Inner = SharedState>,
     PowerSender: Sender<power_policy_interface::psu::event::EventData>,
     LoopbackSender: Sender<event::Loopback>,
@@ -132,7 +126,7 @@ impl<
             .await
             .map_err(|e| {
                 error!("({}): Error disabling sink path", self.name);
-                power_policy_error_from_pd_bus_error(e)
+                power_policy_error_from_pd_error(e)
             })?;
         self.psu_state.disconnect(false)
     }
@@ -157,7 +151,7 @@ impl<
             .await
             .map_err(|e| {
                 error!("({}): Error enabling sink path", self.name);
-                power_policy_error_from_pd_bus_error(e)
+                power_policy_error_from_pd_error(e)
             })?;
         self.psu_state.connect_consumer(capability)
     }
@@ -168,5 +162,25 @@ impl<
 
     fn state_mut(&mut self) -> &mut State {
         &mut self.psu_state
+    }
+}
+
+impl<
+    'device,
+    C: Lockable<Inner: Pd + SystemPowerStateStatus>,
+    Shared: Lockable<Inner = SharedState>,
+    PowerSender: Sender<power_policy_interface::psu::event::EventData>,
+    LoopbackSender: Sender<event::Loopback>,
+> type_c_interface::port::power::SystemPowerStateStatus for Port<'device, C, Shared, PowerSender, LoopbackSender>
+{
+    async fn set_system_power_state_status(
+        &mut self,
+        state: type_c_interface::control::power::SystemPowerState,
+    ) -> Result<(), PdError> {
+        self.controller
+            .lock()
+            .await
+            .set_system_power_state_status(self.port, state)
+            .await
     }
 }

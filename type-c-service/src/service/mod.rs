@@ -8,10 +8,11 @@ use embedded_services::{debug, error, event::Receiver, info, trace};
 use embedded_usb_pd::GlobalPortId;
 use embedded_usb_pd::PdError as Error;
 use power_policy_interface::service::event::EventData as PowerPolicyEventData;
+use type_c_interface::control::pd::PortStatus;
 use type_c_interface::service::event::{PortEvent, PortEventData};
 
+use type_c_interface::port::Device;
 use type_c_interface::port::event::PortStatusEventBitfield;
-use type_c_interface::port::{Device, PortStatus};
 use type_c_interface::service::event;
 
 pub mod config;

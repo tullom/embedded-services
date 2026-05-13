@@ -1,272 +1,27 @@
 //! PD controller related code
-use core::future::Future;
-use core::num::NonZeroU8;
-
 use embassy_sync::channel::{DynamicReceiver, DynamicSender};
 use embedded_usb_pd::ucsi::lpm;
-use embedded_usb_pd::{
-    DataRole, Error, GlobalPortId, LocalPortId, PdError, PlugOrientation, PowerRole,
-    ado::Ado,
-    pdinfo::{AltMode, PowerPathStatus},
-    type_c::ConnectionState,
-};
+use embedded_usb_pd::{GlobalPortId, LocalPortId, PdError, ado::Ado};
 
 use embedded_services::ipc::deferred;
 use embedded_services::{GlobalRawMutex, intrusive_list};
 
+pub mod electrical_disconnect;
 pub mod event;
-
+pub mod max_sink_voltage;
+pub mod pd;
+pub mod power;
+pub mod retimer;
+pub mod type_c;
+use crate::control::dp::{DpConfig, DpStatus};
+use crate::control::pd::PdStateMachineConfig;
+use crate::control::retimer::RetimerFwUpdateState;
+use crate::control::tbt::TbtConfig;
+use crate::control::type_c::TypeCStateMachineState;
+use crate::control::usb::UsbControlConfig;
+use crate::control::vdm::{AttnVdm, OtherVdm, SendVdm};
+use crate::controller::ControllerId;
 use crate::service::event::PortEvent as ServicePortEvent;
-
-/// Length of the Other VDM data
-pub const OTHER_VDM_LEN: usize = 29;
-/// Length of the Attention VDM data
-pub const ATTN_VDM_LEN: usize = 9;
-/// maximum number of data objects in a VDM
-pub const MAX_NUM_DATA_OBJECTS: usize = 7; // 7 VDOs of 4 bytes each
-
-/// Controller ID
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct ControllerId(pub u8);
-
-/// Port status
-#[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct PortStatus {
-    /// Current available source contract
-    pub available_source_contract: Option<power_policy_interface::capability::PowerCapability>,
-    /// Current available sink contract
-    pub available_sink_contract: Option<power_policy_interface::capability::PowerCapability>,
-    /// Current connection state
-    pub connection_state: Option<ConnectionState>,
-    /// Port partner supports dual-power roles
-    pub dual_power: bool,
-    /// plug orientation
-    pub plug_orientation: PlugOrientation,
-    /// power role
-    pub power_role: PowerRole,
-    /// data role
-    pub data_role: DataRole,
-    /// Active alt-modes
-    pub alt_mode: AltMode,
-    /// Power path status
-    pub power_path: PowerPathStatus,
-    /// EPR mode active
-    pub epr: bool,
-    /// Port partner is unconstrained
-    pub unconstrained_power: bool,
-}
-
-impl PortStatus {
-    /// Create a new blank port status
-    /// Needed because default() is not const
-    pub const fn new() -> Self {
-        Self {
-            available_source_contract: None,
-            available_sink_contract: None,
-            connection_state: None,
-            dual_power: false,
-            plug_orientation: PlugOrientation::CC1,
-            power_role: PowerRole::Sink,
-            data_role: DataRole::Dfp,
-            alt_mode: AltMode::none(),
-            power_path: PowerPathStatus::none(),
-            epr: false,
-            unconstrained_power: false,
-        }
-    }
-
-    /// Check if the port is connected
-    pub fn is_connected(&self) -> bool {
-        matches!(
-            self.connection_state,
-            Some(ConnectionState::Attached)
-                | Some(ConnectionState::DebugAccessory)
-                | Some(ConnectionState::AudioAccessory)
-        )
-    }
-
-    /// Check if a debug accessory is connected
-    pub fn is_debug_accessory(&self) -> bool {
-        matches!(self.connection_state, Some(ConnectionState::DebugAccessory))
-    }
-}
-
-impl Default for PortStatus {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Other Vdm data
-#[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct OtherVdm {
-    /// Other VDM data
-    pub data: [u8; OTHER_VDM_LEN],
-}
-
-impl Default for OtherVdm {
-    fn default() -> Self {
-        Self {
-            data: [0; OTHER_VDM_LEN],
-        }
-    }
-}
-
-impl From<OtherVdm> for [u8; OTHER_VDM_LEN] {
-    fn from(vdm: OtherVdm) -> Self {
-        vdm.data
-    }
-}
-
-impl From<[u8; OTHER_VDM_LEN]> for OtherVdm {
-    fn from(data: [u8; OTHER_VDM_LEN]) -> Self {
-        Self { data }
-    }
-}
-
-/// Attention Vdm data
-#[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct AttnVdm {
-    /// Attention VDM data
-    pub data: [u8; ATTN_VDM_LEN],
-}
-
-/// DisplayPort pin configuration
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct DpPinConfig {
-    /// 4L DP connection using USBC-USBC cable (Pin Assignment C)
-    pub pin_c: bool,
-    /// 2L USB + 2L DP connection using USBC-USBC cable (Pin Assignment D)
-    pub pin_d: bool,
-    /// 4L DP connection using USBC-DP cable (Pin Assignment E)
-    pub pin_e: bool,
-}
-
-/// DisplayPort status data
-#[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct DpStatus {
-    /// DP alt-mode entered
-    pub alt_mode_entered: bool,
-    /// Get DP DFP pin config
-    pub dfp_d_pin_cfg: DpPinConfig,
-}
-
-/// DisplayPort configuration data
-#[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct DpConfig {
-    /// DP alt-mode enabled
-    pub enable: bool,
-    /// Set DP DFP pin config
-    pub dfp_d_pin_cfg: DpPinConfig,
-}
-
-impl Default for AttnVdm {
-    fn default() -> Self {
-        Self {
-            data: [0; ATTN_VDM_LEN],
-        }
-    }
-}
-
-impl From<AttnVdm> for [u8; ATTN_VDM_LEN] {
-    fn from(vdm: AttnVdm) -> Self {
-        vdm.data
-    }
-}
-
-impl From<[u8; ATTN_VDM_LEN]> for AttnVdm {
-    fn from(data: [u8; ATTN_VDM_LEN]) -> Self {
-        Self { data }
-    }
-}
-
-/// Send VDM data
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct SendVdm {
-    /// initiating a VDM sequence
-    pub initiator: bool,
-    /// VDO count
-    pub vdo_count: u8,
-    /// VDO data
-    pub vdo_data: [u32; MAX_NUM_DATA_OBJECTS],
-}
-
-impl SendVdm {
-    /// Create a new blank port status
-    pub const fn new() -> Self {
-        Self {
-            initiator: false,
-            vdo_count: 0,
-            vdo_data: [0; MAX_NUM_DATA_OBJECTS],
-        }
-    }
-}
-
-impl Default for SendVdm {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// USB control configuration
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct UsbControlConfig {
-    /// Enable USB2 data path
-    pub usb2_enabled: bool,
-    /// Enable USB3 data path  
-    pub usb3_enabled: bool,
-    /// Enable USB4 data path
-    pub usb4_enabled: bool,
-}
-
-impl Default for UsbControlConfig {
-    fn default() -> Self {
-        Self {
-            usb2_enabled: true,
-            usb3_enabled: true,
-            usb4_enabled: true,
-        }
-    }
-}
-
-/// Thunderbolt control configuration
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[derive(Debug, Clone, Default, Copy, PartialEq)]
-pub struct TbtConfig {
-    /// Enable Thunderbolt
-    pub tbt_enabled: bool,
-}
-
-/// PD state-machine configuration
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[derive(Debug, Clone, Default, Copy, PartialEq)]
-pub struct PdStateMachineConfig {
-    /// Enable or disable the PD state-machine
-    pub enabled: bool,
-}
-
-/// TypeC State Machine
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum TypeCStateMachineState {
-    /// Sink state machine only
-    Sink,
-    /// Source state machine only
-    Source,
-    /// DRP state machine
-    Drp,
-    /// Disabled
-    Disabled,
-}
 
 /// Port-specific command data
 #[derive(Copy, Clone, Debug)]
@@ -322,16 +77,6 @@ pub struct PortCommand {
     pub data: PortCommandData,
 }
 
-/// PD controller command-specific data
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum RetimerFwUpdateState {
-    /// Retimer FW Update Inactive
-    Inactive,
-    /// Retimer FW Update Active
-    Active,
-}
-
 /// Port-specific response data
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -365,33 +110,12 @@ impl PortResponseData {
 /// Port-specific command response
 pub type PortResponse = Result<PortResponseData, PdError>;
 
-/// System power state for Sx App Config register.
-///
-/// Used to notify the PD controller of the current system power state,
-/// which triggers Application Configuration updates (e.g., crossbar reconfiguration).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum SystemPowerState {
-    /// S0 - System fully running
-    S0,
-    /// S3 - Suspend to RAM
-    S3,
-    /// S4 - Hibernate
-    S4,
-    /// S5 - Soft off
-    S5,
-    /// S0ix - Modern standby / Connected standby
-    S0ix,
-}
-
 /// PD controller command-specific data
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum InternalCommandData {
     /// Reset the PD controller
     Reset,
-    /// Get controller status
-    Status,
     /// Sync controller state
     SyncState,
 }
@@ -409,38 +133,22 @@ pub enum Command {
 /// Controller-specific response data
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum InternalResponseData<'a> {
+pub enum InternalResponseData {
     /// Command complete
     Complete,
-    /// Controller status
-    Status(ControllerStatus<'a>),
 }
 
 /// Response for controller-specific commands
-pub type InternalResponse<'a> = Result<InternalResponseData<'a>, PdError>;
+pub type InternalResponse = Result<InternalResponseData, PdError>;
 
 /// PD controller command response
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum Response<'a> {
+pub enum Response {
     /// Controller response
-    Controller(InternalResponse<'a>),
+    Controller(InternalResponse),
     /// Port response
     Port(PortResponse),
-}
-
-/// Controller status
-#[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct ControllerStatus<'a> {
-    /// Current controller mode
-    pub mode: &'a str,
-    /// True if we did not have to boot from a backup FW bank
-    pub valid_fw_bank: bool,
-    /// FW version 0
-    pub fw_version0: u32,
-    /// FW version 1
-    pub fw_version1: u32,
 }
 
 /// Per-port registration info
@@ -459,7 +167,7 @@ pub struct Device<'a> {
     id: ControllerId,
     pub ports: &'a [PortRegistration],
     num_ports: usize,
-    command: deferred::Channel<GlobalRawMutex, Command, Response<'static>>,
+    command: deferred::Channel<GlobalRawMutex, Command, Response>,
 }
 
 impl intrusive_list::NodeContainer for Device<'static> {
@@ -486,7 +194,7 @@ impl<'a> Device<'a> {
     }
 
     /// Send a command to this controller
-    pub async fn execute_command(&self, command: Command) -> Response<'_> {
+    pub async fn execute_command(&self, command: Command) -> Response {
         self.command.execute(command).await
     }
 
@@ -512,7 +220,7 @@ impl<'a> Device<'a> {
     /// Create a command handler for this controller
     ///
     /// DROP SAFETY: Direct call to deferred channel primitive
-    pub async fn receive(&self) -> deferred::Request<'_, GlobalRawMutex, Command, Response<'static>> {
+    pub async fn receive(&self) -> deferred::Request<'_, GlobalRawMutex, Command, Response> {
         self.command.receive().await
     }
 
@@ -520,142 +228,4 @@ impl<'a> Device<'a> {
     pub fn num_ports(&self) -> usize {
         self.num_ports
     }
-}
-
-/// PD controller trait that device drivers may use to integrate with internal messaging system
-pub trait Controller {
-    /// Type of error returned by the bus
-    type BusError;
-
-    /// Returns the port status
-    fn get_port_status(&mut self, port: LocalPortId)
-    -> impl Future<Output = Result<PortStatus, Error<Self::BusError>>>;
-
-    /// Reset the controller
-    fn reset_controller(&mut self) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Returns the retimer fw update state
-    fn get_rt_fw_update_status(
-        &mut self,
-        port: LocalPortId,
-    ) -> impl Future<Output = Result<RetimerFwUpdateState, Error<Self::BusError>>>;
-    /// Set retimer fw update state
-    fn set_rt_fw_update_state(&mut self, port: LocalPortId) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-    /// Clear retimer fw update state
-    fn clear_rt_fw_update_state(
-        &mut self,
-        port: LocalPortId,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-    /// Set retimer compliance
-    fn set_rt_compliance(&mut self, port: LocalPortId) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Reconfigure the retimer for the given port.
-    fn reconfigure_retimer(&mut self, port: LocalPortId) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Clear the dead battery flag for the given port.
-    fn clear_dead_battery_flag(&mut self, port: LocalPortId)
-    -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Enable or disable sink path
-    fn enable_sink_path(
-        &mut self,
-        port: LocalPortId,
-        enable: bool,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-    /// Get current controller status
-    fn get_controller_status(
-        &mut self,
-    ) -> impl Future<Output = Result<ControllerStatus<'static>, Error<Self::BusError>>>;
-    /// Get current PD alert
-    fn get_pd_alert(&mut self, port: LocalPortId) -> impl Future<Output = Result<Option<Ado>, Error<Self::BusError>>>;
-    /// Set the maximum sink voltage for the given port
-    ///
-    /// This may trigger a renegotiation
-    fn set_max_sink_voltage(
-        &mut self,
-        port: LocalPortId,
-        voltage_mv: Option<u16>,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-    /// Set port unconstrained status
-    fn set_unconstrained_power(
-        &mut self,
-        port: LocalPortId,
-        unconstrained: bool,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Get the Rx Other VDM data for the given port
-    fn get_other_vdm(&mut self, port: LocalPortId) -> impl Future<Output = Result<OtherVdm, Error<Self::BusError>>>;
-    /// Get the Rx Attention VDM data for the given port
-    fn get_attn_vdm(&mut self, port: LocalPortId) -> impl Future<Output = Result<AttnVdm, Error<Self::BusError>>>;
-    /// Send a VDM to the given port
-    fn send_vdm(
-        &mut self,
-        port: LocalPortId,
-        tx_vdm: SendVdm,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Set USB control configuration for the given port
-    fn set_usb_control(
-        &mut self,
-        port: LocalPortId,
-        config: UsbControlConfig,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Get DisplayPort status for the given port
-    fn get_dp_status(&mut self, port: LocalPortId) -> impl Future<Output = Result<DpStatus, Error<Self::BusError>>>;
-    /// Set DisplayPort configuration for the given port
-    fn set_dp_config(
-        &mut self,
-        port: LocalPortId,
-        config: DpConfig,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-    /// Execute PD Data Reset for the given port
-    fn execute_drst(&mut self, port: LocalPortId) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Set Thunderbolt configuration for the given port
-    fn set_tbt_config(
-        &mut self,
-        port: LocalPortId,
-        config: TbtConfig,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Set PD state-machine configuration for the given port
-    fn set_pd_state_machine_config(
-        &mut self,
-        port: LocalPortId,
-        config: PdStateMachineConfig,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Set Type-C state-machine configuration for the given port
-    fn set_type_c_state_machine_config(
-        &mut self,
-        port: LocalPortId,
-        state: TypeCStateMachineState,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Execute the given UCSI command
-    fn execute_ucsi_command(
-        &mut self,
-        command: lpm::LocalCommand,
-    ) -> impl Future<Output = Result<Option<lpm::ResponseData>, Error<Self::BusError>>>;
-
-    /// Execute an electrical disconnect on the given port, if supported by the controller.
-    ///
-    /// If `reconnect_time_s` is provided, the controller should automatically reconnect the port after the specified time
-    /// has elapsed. If `reconnect_time_s` is [`None`], the port should remain disconnected until manually reconnected.
-    fn execute_electrical_disconnect(
-        &mut self,
-        port: LocalPortId,
-        reconnect_time_s: Option<NonZeroU8>,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
-
-    /// Set the system power state on the given port.
-    ///
-    /// This notifies the PD controller of the current system power state,
-    /// which triggers Application Configuration updates (e.g., crossbar reconfiguration).
-    fn set_power_state(
-        &mut self,
-        port: LocalPortId,
-        state: SystemPowerState,
-    ) -> impl Future<Output = Result<(), Error<Self::BusError>>>;
 }
