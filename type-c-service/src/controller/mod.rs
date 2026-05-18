@@ -12,9 +12,11 @@ use crate::controller::event::{Event, Loopback};
 use crate::controller::state::SharedState;
 
 pub mod config;
+pub mod discover_identity;
 pub mod electrical_disconnect;
 pub mod event;
 pub mod event_receiver;
+pub mod hard_reset;
 pub mod macros;
 pub mod max_sink_voltage;
 mod pd;

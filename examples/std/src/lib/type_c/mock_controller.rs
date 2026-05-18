@@ -244,6 +244,28 @@ impl type_c_interface::controller::svid::SvidDiscovery for Controller<'_> {
     }
 }
 
+impl type_c_interface::controller::hard_reset::HardReset for Controller<'_> {
+    async fn hard_reset(&mut self, port: LocalPortId) -> Result<(), PdError> {
+        debug!("Hard reset for port {port:?}");
+        Ok(())
+    }
+}
+
+impl type_c_interface::controller::discover_identity::DiscoverIdentity for Controller<'_> {
+    async fn get_discover_identity_sop_response(&mut self, port: LocalPortId) -> Result<sop::ResponseVdos, PdError> {
+        debug!("Get Discover Identity SOP response for port {port:?}");
+        Err(PdError::Failed)
+    }
+
+    async fn get_discover_identity_sop_prime_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> Result<sop_prime::ResponseVdos, PdError> {
+        debug!("Get Discover Identity SOP' response for port {port:?}");
+        Err(PdError::Failed)
+    }
+}
+
 impl type_c_interface::controller::pd::StateMachine for Controller<'_> {
     async fn set_pd_state_machine_config(
         &mut self,

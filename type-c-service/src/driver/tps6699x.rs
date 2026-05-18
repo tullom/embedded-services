@@ -892,6 +892,7 @@ impl<M: RawMutex, B: I2c> type_c_interface::controller::max_sink_voltage::MaxSin
 
 impl<M: RawMutex, B: I2c> type_c_interface::controller::svid::SvidDiscovery for Tps6699x<'_, M, B> {
     async fn get_discovered_svids(&mut self, port: LocalPortId) -> Result<DiscoveredSvids, PdError> {
+        self.guard_no_fw_update_active()?;
         let svids = self
             .tps6699x
             .get_discovered_svids(port)
@@ -910,6 +911,59 @@ impl<M: RawMutex, B: I2c> type_c_interface::controller::svid::SvidDiscovery for 
 
         let svids = DiscoveredSvids::new(sop, sop_prime);
         Ok(svids)
+    }
+}
+
+impl<M: RawMutex, B: I2c> type_c_interface::controller::hard_reset::HardReset for Tps6699x<'_, M, B> {
+    async fn hard_reset(&mut self, port: LocalPortId) -> Result<(), PdError> {
+        self.guard_no_fw_update_active()?;
+        match self.tps6699x.execute_hrst(port).await.map_err(|e| self.log_error(e))? {
+            ReturnValue::Success => Ok(()),
+            r => {
+                debug!("Error executing hard reset on port {}: {:#?}", port.0, r);
+                Err(PdError::InvalidResponse)
+            }
+        }
+    }
+}
+
+impl<M: RawMutex, B: I2c> type_c_interface::controller::discover_identity::DiscoverIdentity for Tps6699x<'_, M, B> {
+    async fn get_discover_identity_sop_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> Result<embedded_usb_pd::vdm::structured::command::discover_identity::sop::ResponseVdos, PdError> {
+        self.guard_no_fw_update_active()?;
+        let data = self
+            .tps6699x
+            .get_received_sop_identity_data(port)
+            .await
+            .map_err(|e| self.log_error(e))?;
+        match data.try_into() {
+            Ok(vdos) => Ok(vdos),
+            Err(e) => {
+                debug!("Error deserializing Received SOP Identity Data: {:?}", e);
+                Err(PdError::Serialize)
+            }
+        }
+    }
+
+    async fn get_discover_identity_sop_prime_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> Result<embedded_usb_pd::vdm::structured::command::discover_identity::sop_prime::ResponseVdos, PdError> {
+        self.guard_no_fw_update_active()?;
+        let data = self
+            .tps6699x
+            .get_received_sop_prime_identity_data(port)
+            .await
+            .map_err(|e| self.log_error(e))?;
+        match data.try_into() {
+            Ok(vdos) => Ok(vdos),
+            Err(e) => {
+                debug!("Error deserializing Received SOP Prime Identity Data: {:?}", e);
+                Err(PdError::Serialize)
+            }
+        }
     }
 }
 
