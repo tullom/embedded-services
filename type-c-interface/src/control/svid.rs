@@ -15,7 +15,7 @@ pub struct DiscoveredSvids {
 
 impl DiscoveredSvids {
     /// The number of SVIDs that can be reported in a single DiscoveredSvids response.
-    const NUM_SVIDS: usize = 8;
+    pub const NUM_SVIDS: usize = 8;
 
     /// Create a new response object from `sop` and `sop_prime`.
     pub fn new(sop: Vec<Svid, { Self::NUM_SVIDS }>, sop_prime: Vec<Svid, { Self::NUM_SVIDS }>) -> Self {

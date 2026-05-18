@@ -727,7 +727,7 @@ impl<M: RawMutex, B: I2c> Pd for Tps6699x<'_, M, B> {
         match self.tps6699x.execute_hrst(port).await.map_err(|e| self.log_error(e))? {
             ReturnValue::Success => Ok(()),
             r => {
-                debug!("Error executing hard reset on port {}: {:#?}", port.0, r);
+                error!("Error executing hard reset on port {}: {:#?}", port.0, r);
                 Err(PdError::InvalidResponse)
             }
         }
@@ -767,7 +767,7 @@ impl<M: RawMutex, B: I2c> Pd for Tps6699x<'_, M, B> {
         match data.try_into() {
             Ok(vdos) => Ok(vdos),
             Err(e) => {
-                debug!("Error deserializing Received SOP Identity Data: {:?}", e);
+                error!("Error deserializing Received SOP Identity Data: {:?}", e);
                 Err(PdError::Serialize)
             }
         }
@@ -786,7 +786,7 @@ impl<M: RawMutex, B: I2c> Pd for Tps6699x<'_, M, B> {
         match data.try_into() {
             Ok(vdos) => Ok(vdos),
             Err(e) => {
-                debug!("Error deserializing Received SOP Prime Identity Data: {:?}", e);
+                error!("Error deserializing Received SOP Prime Identity Data: {:?}", e);
                 Err(PdError::Serialize)
             }
         }
