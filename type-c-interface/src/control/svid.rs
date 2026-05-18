@@ -1,7 +1,7 @@
 use embedded_usb_pd::vdm::structured::Svid;
 use heapless::Vec;
 
-/// Response from the `Discover SVIDs REQ` message and the [`PortCommandData::GetDiscoveredSvids`] command.
+/// Response from the `Discover SVIDs REQ` message and the PortCommandData::GetDiscoveredSvids command.
 // Could be changed to hold the heapless::Vec directly if they were Copy or if PortResponseData was not Copy
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -14,7 +14,7 @@ pub struct DiscoveredSvids {
 }
 
 impl DiscoveredSvids {
-    /// The number of SVIDs that can be reported in a single [`PortResponseData::DiscoveredSvids`] response.
+    /// The number of SVIDs that can be reported in a single DiscoveredSvids response.
     const NUM_SVIDS: usize = 8;
 
     /// Create a new response object from `sop` and `sop_prime`.

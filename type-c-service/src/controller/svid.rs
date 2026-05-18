@@ -1,4 +1,4 @@
-//! Max sink voltage port trait implementation
+//! SvidDiscovery port trait implementation
 use embedded_services::{event::Sender, sync::Lockable};
 use embedded_usb_pd::PdError;
 use type_c_interface::{control::svid::DiscoveredSvids, controller::svid::SvidDiscovery};
