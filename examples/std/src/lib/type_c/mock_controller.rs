@@ -230,30 +230,17 @@ impl type_c_interface::controller::pd::Pd for Controller<'_> {
         debug!("Set Thunderbolt config for port {port:?}: {config:?}");
         Ok(())
     }
-}
 
-impl type_c_interface::controller::max_sink_voltage::MaxSinkVoltage for Controller<'_> {
-    async fn set_max_sink_voltage(&mut self, port: LocalPortId, voltage_mv: Option<u16>) -> Result<(), PdError> {
-        debug!("Set max sink voltage for port {}: {:?}", port.0, voltage_mv);
-        Ok(())
-    }
-}
-
-impl type_c_interface::controller::svid::SvidDiscovery for Controller<'_> {
-    async fn get_discovered_svids(&mut self, port: LocalPortId) -> Result<DiscoveredSvids, PdError> {
-        debug!("Get discovered SVIDs for port {port:?}");
-        Ok(DiscoveredSvids::default())
-    }
-}
-
-impl type_c_interface::controller::hard_reset::HardReset for Controller<'_> {
     async fn hard_reset(&mut self, port: LocalPortId) -> Result<(), PdError> {
         debug!("Hard reset for port {port:?}");
         Ok(())
     }
-}
 
-impl type_c_interface::controller::discover_identity::DiscoverIdentity for Controller<'_> {
+    async fn get_discovered_svids(&mut self, port: LocalPortId) -> Result<DiscoveredSvids, PdError> {
+        debug!("Get discovered SVIDs for port {port:?}");
+        Ok(DiscoveredSvids::default())
+    }
+
     async fn get_discover_identity_sop_response(&mut self, port: LocalPortId) -> Result<sop::ResponseVdos, PdError> {
         debug!("Get Discover Identity SOP response for port {port:?}");
         Err(PdError::Failed)
@@ -265,6 +252,13 @@ impl type_c_interface::controller::discover_identity::DiscoverIdentity for Contr
     ) -> Result<sop_prime::ResponseVdos, PdError> {
         debug!("Get Discover Identity SOP' response for port {port:?}");
         Err(PdError::Failed)
+    }
+}
+
+impl type_c_interface::controller::max_sink_voltage::MaxSinkVoltage for Controller<'_> {
+    async fn set_max_sink_voltage(&mut self, port: LocalPortId, voltage_mv: Option<u16>) -> Result<(), PdError> {
+        debug!("Set max sink voltage for port {}: {:?}", port.0, voltage_mv);
+        Ok(())
     }
 }
 

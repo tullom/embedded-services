@@ -2,9 +2,11 @@
 use embedded_services::{event::Sender, sync::Lockable};
 use embedded_usb_pd::PdError;
 use embedded_usb_pd::ado::Ado;
+use embedded_usb_pd::vdm::structured::command::discover_identity::{sop, sop_prime};
 use type_c_interface::control::{
     dp::{DpConfig, DpStatus},
     pd::{PdStateMachineConfig, PortStatus},
+    svid::DiscoveredSvids,
     tbt::TbtConfig,
     usb::UsbControlConfig,
     vdm::{AttnVdm, OtherVdm, SendVdm},
@@ -129,6 +131,30 @@ impl<
 
     async fn set_usb_control(&mut self, config: UsbControlConfig) -> Result<(), PdError> {
         self.controller.lock().await.set_usb_control(self.port, config).await
+    }
+
+    async fn hard_reset(&mut self) -> Result<(), PdError> {
+        self.controller.lock().await.hard_reset(self.port).await
+    }
+
+    async fn get_discovered_svids(&mut self) -> Result<DiscoveredSvids, PdError> {
+        self.controller.lock().await.get_discovered_svids(self.port).await
+    }
+
+    async fn get_discover_identity_sop_response(&mut self) -> Result<sop::ResponseVdos, PdError> {
+        self.controller
+            .lock()
+            .await
+            .get_discover_identity_sop_response(self.port)
+            .await
+    }
+
+    async fn get_discover_identity_sop_prime_response(&mut self) -> Result<sop_prime::ResponseVdos, PdError> {
+        self.controller
+            .lock()
+            .await
+            .get_discover_identity_sop_prime_response(self.port)
+            .await
     }
 }
 

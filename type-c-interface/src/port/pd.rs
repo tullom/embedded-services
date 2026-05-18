@@ -1,9 +1,11 @@
 use embedded_services::named::Named;
+use embedded_usb_pd::vdm::structured::command::discover_identity::{sop, sop_prime};
 use embedded_usb_pd::{PdError, ado::Ado};
 
 use crate::control::{
     dp::{DpConfig, DpStatus},
     pd::{PdStateMachineConfig, PortStatus},
+    svid::DiscoveredSvids,
     tbt::TbtConfig,
     usb::UsbControlConfig,
     vdm::{AttnVdm, OtherVdm, SendVdm},
@@ -34,6 +36,8 @@ pub trait Pd: Named {
     fn send_vdm(&mut self, tx_vdm: SendVdm) -> impl Future<Output = Result<(), PdError>>;
     /// Execute PD Data Reset for this port
     fn execute_drst(&mut self) -> impl Future<Output = Result<(), PdError>>;
+    /// Execute a Hard Reset on this port.
+    fn hard_reset(&mut self) -> impl Future<Output = Result<(), PdError>>;
 
     /// Get DisplayPort status for this port
     fn get_dp_status(&mut self) -> impl Future<Output = Result<DpStatus, PdError>>;
@@ -45,6 +49,17 @@ pub trait Pd: Named {
 
     /// Set USB control configuration for this port
     fn set_usb_control(&mut self, config: UsbControlConfig) -> impl Future<Output = Result<(), PdError>>;
+
+    /// Get this port's discovered SVIDs
+    fn get_discovered_svids(&mut self) -> impl Future<Output = Result<DiscoveredSvids, PdError>>;
+
+    /// Get the latest response from the Discover Identity command targeting SOP.
+    fn get_discover_identity_sop_response(&mut self) -> impl Future<Output = Result<sop::ResponseVdos, PdError>>;
+
+    /// Get the latest response from the Discover Identity command targeting SOP'.
+    fn get_discover_identity_sop_prime_response(
+        &mut self,
+    ) -> impl Future<Output = Result<sop_prime::ResponseVdos, PdError>>;
 }
 
 /// PD state machine related controller functionality
