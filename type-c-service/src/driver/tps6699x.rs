@@ -16,6 +16,7 @@ use embedded_usb_pd::type_c::Current as TypecCurrent;
 use embedded_usb_pd::ucsi::lpm;
 use embedded_usb_pd::{DataRole, Error, LocalPortId, PdError, PlugOrientation, PowerRole};
 use fw_update_interface::basic::{Error as BasicFwUpdateError, FwUpdate as BasicFwUpdate};
+use heapless::Vec;
 use tps6699x::MAX_SUPPORTED_PORTS;
 use tps6699x::asynchronous::embassy::{self as tps6699x_drv, interrupt};
 use tps6699x::asynchronous::fw_update::UpdateTarget;
@@ -33,6 +34,7 @@ use type_c_interface::control::dp::{DpConfig, DpPinConfig, DpStatus};
 use type_c_interface::control::pd::{PdStateMachineConfig, PortStatus};
 use type_c_interface::control::power::SystemPowerState;
 use type_c_interface::control::retimer::RetimerFwUpdateState;
+use type_c_interface::control::svid::DiscoveredSvids;
 use type_c_interface::control::tbt::TbtConfig;
 use type_c_interface::control::type_c::TypeCStateMachineState;
 use type_c_interface::control::usb::UsbControlConfig;
@@ -885,6 +887,29 @@ impl<M: RawMutex, B: I2c> type_c_interface::controller::max_sink_voltage::MaxSin
             .set_autonegotiate_sink_max_voltage(port, voltage_mv)
             .await
             .map_err(|e| self.log_error(e))
+    }
+}
+
+impl<M: RawMutex, B: I2c> type_c_interface::controller::svid::SvidDiscovery for Tps6699x<'_, M, B> {
+    async fn get_discovered_svids(&mut self, port: LocalPortId) -> Result<DiscoveredSvids, PdError> {
+        let svids = self
+            .tps6699x
+            .get_discovered_svids(port)
+            .await
+            .map_err(|e| self.log_error(e))?;
+        debug!("{:?} discovered SVIDs: {:?}", port, svids);
+        let mut sop = Vec::new();
+        for svid in svids.svid_sop().take(sop.capacity()) {
+            let _ = sop.push(svid);
+        }
+
+        let mut sop_prime = Vec::new();
+        for svid in svids.svid_sop_prime().take(sop_prime.capacity()) {
+            let _ = sop_prime.push(svid);
+        }
+
+        let svids = DiscoveredSvids::new(sop, sop_prime);
+        Ok(svids)
     }
 }
 

@@ -237,6 +237,13 @@ impl type_c_interface::controller::max_sink_voltage::MaxSinkVoltage for Controll
     }
 }
 
+impl type_c_interface::controller::svid::SvidDiscovery for Controller<'_> {
+    async fn get_discovered_svids(&mut self, port: LocalPortId) -> Result<DiscoveredSvids, PdError> {
+        debug!("Get discovered SVIDs for port {port:?}");
+        Ok(DiscoveredSvids::default())
+    }
+}
+
 impl type_c_interface::controller::pd::StateMachine for Controller<'_> {
     async fn set_pd_state_machine_config(
         &mut self,

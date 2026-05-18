@@ -21,6 +21,7 @@ mod pd;
 mod power;
 pub mod retimer;
 pub mod state;
+pub mod svid;
 pub mod type_c;
 pub mod ucsi;
 
