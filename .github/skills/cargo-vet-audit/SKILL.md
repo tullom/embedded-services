@@ -60,6 +60,29 @@ Confidence scoring rubric:
 
 ## Step 5: Certify
 
+### Exemptions Are a Last Resort
+
+Do **not** add `[[exemptions]]` entries without explicit user confirmation.
+Each exemption bypasses the audit process entirely and must be justified.
+Valid reasons include:
+
+- The crate is only needed for `safe-to-run` (test/dev tooling) and a full
+  audit is disproportionate
+- An upstream import source was removed and the crate needs temporary coverage
+  while a first-party audit is scheduled
+- The user explicitly requests an exemption after reviewing the trade-offs
+
+Always prefer auditing (full or delta) over exempting. When an exemption is
+unavoidable, present it to the user for manual approval before adding it.
+
+Every exemption **must** include a `--notes` explaining why the exemption exists
+and under what conditions it can be removed:
+
+```shell
+cargo vet add-exemption CRATE VERSION --criteria CRITERIA \
+  --notes "Reason for exemption; plan for resolution"
+```
+
 For each crate that passes (confidence ≥ 70), run:
 
 ```shell
@@ -104,9 +127,24 @@ the human reviewer, never the AI agent.
 
 ## Step 6: Verify and Clean Up
 
-1. Run `cargo vet` again to confirm everything passes
-2. Run `cargo vet prune` to remove stale exemptions
-3. Run `cargo vet` one final time to confirm clean state
+Before final verification, detect and remove identical duplicate `[[audits.*]]`
+entries that may have been appended by retried `cargo vet certify` commands.
+
+Duplicate-check workflow:
+
+1. Scan `supply-chain/audits.toml` for byte-for-byte identical audit blocks
+2. If duplicates exist, keep one copy (usually the first) and remove the rest
+3. Re-run `cargo vet` after deduplication to ensure state is still valid
+
+To detect duplicates, scan `supply-chain/audits.toml` for repeated blocks
+with identical crate name, who, criteria, version/delta, and notes fields.
+Remove any duplicates before proceeding.
+
+Then run the normal cleanup sequence:
+
+4. Run `cargo vet` again to confirm everything passes
+5. Run `cargo vet prune` to remove stale exemptions
+6. Run `cargo vet` one final time to confirm clean state
 
 ## Reviewing Import Sources
 

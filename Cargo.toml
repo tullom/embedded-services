@@ -61,7 +61,6 @@ unwrap_used = "deny"
 [workspace.dependencies]
 
 odp-service-common = { path = "./odp-service-common" }
-heapless = "0.8.*"
 aligned = "0.4"
 anyhow = "1.0"
 battery-service-interface = { path = "./battery-service-interface" }
@@ -84,8 +83,8 @@ embedded-mcu-hal = "0.2.0"
 embassy-futures = "0.1.2"
 embassy-imxrt = { git = "https://github.com/OpenDevicePartnership/embassy-imxrt" }
 embassy-sync = "0.8"
-embassy-time = "0.5.0"
-embassy-time-driver = "0.2.1"
+embassy-time = "0.5.1"
+embassy-time-driver = "0.2.2"
 embedded-batteries-async = "0.3"
 embedded-cfu-protocol = { git = "https://github.com/OpenDevicePartnership/embedded-cfu" }
 embedded-hal = "1.0"
@@ -102,6 +101,7 @@ power-policy-interface = { path = "./power-policy-interface" }
 paste = "1.0.15"
 power-policy-service = { path = "./power-policy-service" }
 fixed = "1.23.1"
+heapless = "0.9.2"
 log = "0.4"
 proc-macro2 = "1.0"
 quote = "1.0"
