@@ -4,6 +4,7 @@ use embassy_sync::{channel, mutex::Mutex, signal::Signal};
 use embedded_services::GlobalRawMutex;
 use embedded_services::named::Named;
 use embedded_usb_pd::ado::Ado;
+use embedded_usb_pd::vdm::structured::command::discover_identity::{sop, sop_prime};
 use embedded_usb_pd::{LocalPortId, PdError};
 use embedded_usb_pd::{PowerRole, type_c::Current};
 use embedded_usb_pd::{type_c::ConnectionState, ucsi::lpm};
@@ -14,6 +15,7 @@ use type_c_interface::control::dp::{DpConfig, DpPinConfig, DpStatus};
 use type_c_interface::control::pd::{PdStateMachineConfig, PortStatus};
 use type_c_interface::control::power::SystemPowerState;
 use type_c_interface::control::retimer::RetimerFwUpdateState;
+use type_c_interface::control::svid::DiscoveredSvids;
 use type_c_interface::control::tbt::TbtConfig;
 use type_c_interface::control::type_c::TypeCStateMachineState;
 use type_c_interface::control::usb::UsbControlConfig;
@@ -227,6 +229,29 @@ impl type_c_interface::controller::pd::Pd for Controller<'_> {
     async fn set_tbt_config(&mut self, port: LocalPortId, config: TbtConfig) -> Result<(), PdError> {
         debug!("Set Thunderbolt config for port {port:?}: {config:?}");
         Ok(())
+    }
+
+    async fn hard_reset(&mut self, port: LocalPortId) -> Result<(), PdError> {
+        debug!("Hard reset for port {port:?}");
+        Ok(())
+    }
+
+    async fn get_discovered_svids(&mut self, port: LocalPortId) -> Result<DiscoveredSvids, PdError> {
+        debug!("Get discovered SVIDs for port {port:?}");
+        Ok(DiscoveredSvids::default())
+    }
+
+    async fn get_discover_identity_sop_response(&mut self, port: LocalPortId) -> Result<sop::ResponseVdos, PdError> {
+        debug!("Get Discover Identity SOP response for port {port:?}");
+        Err(PdError::Failed)
+    }
+
+    async fn get_discover_identity_sop_prime_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> Result<sop_prime::ResponseVdos, PdError> {
+        debug!("Get Discover Identity SOP' response for port {port:?}");
+        Err(PdError::Failed)
     }
 }
 

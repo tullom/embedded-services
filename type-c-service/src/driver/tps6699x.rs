@@ -16,6 +16,7 @@ use embedded_usb_pd::type_c::Current as TypecCurrent;
 use embedded_usb_pd::ucsi::lpm;
 use embedded_usb_pd::{DataRole, Error, LocalPortId, PdError, PlugOrientation, PowerRole};
 use fw_update_interface::basic::{Error as BasicFwUpdateError, FwUpdate as BasicFwUpdate};
+use heapless::Vec;
 use tps6699x::MAX_SUPPORTED_PORTS;
 use tps6699x::asynchronous::embassy::{self as tps6699x_drv, interrupt};
 use tps6699x::asynchronous::fw_update::UpdateTarget;
@@ -33,6 +34,7 @@ use type_c_interface::control::dp::{DpConfig, DpPinConfig, DpStatus};
 use type_c_interface::control::pd::{PdStateMachineConfig, PortStatus};
 use type_c_interface::control::power::SystemPowerState;
 use type_c_interface::control::retimer::RetimerFwUpdateState;
+use type_c_interface::control::svid::DiscoveredSvids;
 use type_c_interface::control::tbt::TbtConfig;
 use type_c_interface::control::type_c::TypeCStateMachineState;
 use type_c_interface::control::usb::UsbControlConfig;
@@ -718,6 +720,76 @@ impl<M: RawMutex, B: I2c> Pd for Tps6699x<'_, M, B> {
         config_reg.set_tbt_mode_en(config.tbt_enabled);
 
         { self.tps6699x.lock_inner().await.set_tbt_config(port, config_reg).await }.map_err(|e| self.log_error(e))
+    }
+
+    async fn hard_reset(&mut self, port: LocalPortId) -> Result<(), PdError> {
+        self.guard_no_fw_update_active()?;
+        match self.tps6699x.execute_hrst(port).await.map_err(|e| self.log_error(e))? {
+            ReturnValue::Success => Ok(()),
+            r => {
+                error!("Error executing hard reset on port {}: {:#?}", port.0, r);
+                Err(PdError::InvalidResponse)
+            }
+        }
+    }
+
+    async fn get_discovered_svids(&mut self, port: LocalPortId) -> Result<DiscoveredSvids, PdError> {
+        self.guard_no_fw_update_active()?;
+        let svids = self
+            .tps6699x
+            .get_discovered_svids(port)
+            .await
+            .map_err(|e| self.log_error(e))?;
+        debug!("{:?} discovered SVIDs: {:?}", port, svids);
+        let mut sop = Vec::new();
+        for svid in svids.svid_sop().take(sop.capacity()) {
+            let _ = sop.push(svid);
+        }
+
+        let mut sop_prime = Vec::new();
+        for svid in svids.svid_sop_prime().take(sop_prime.capacity()) {
+            let _ = sop_prime.push(svid);
+        }
+
+        Ok(DiscoveredSvids::new(sop, sop_prime))
+    }
+
+    async fn get_discover_identity_sop_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> Result<embedded_usb_pd::vdm::structured::command::discover_identity::sop::ResponseVdos, PdError> {
+        self.guard_no_fw_update_active()?;
+        let data = self
+            .tps6699x
+            .get_received_sop_identity_data(port)
+            .await
+            .map_err(|e| self.log_error(e))?;
+        match data.try_into() {
+            Ok(vdos) => Ok(vdos),
+            Err(e) => {
+                error!("Error deserializing Received SOP Identity Data: {:?}", e);
+                Err(PdError::Serialize)
+            }
+        }
+    }
+
+    async fn get_discover_identity_sop_prime_response(
+        &mut self,
+        port: LocalPortId,
+    ) -> Result<embedded_usb_pd::vdm::structured::command::discover_identity::sop_prime::ResponseVdos, PdError> {
+        self.guard_no_fw_update_active()?;
+        let data = self
+            .tps6699x
+            .get_received_sop_prime_identity_data(port)
+            .await
+            .map_err(|e| self.log_error(e))?;
+        match data.try_into() {
+            Ok(vdos) => Ok(vdos),
+            Err(e) => {
+                error!("Error deserializing Received SOP Prime Identity Data: {:?}", e);
+                Err(PdError::Serialize)
+            }
+        }
     }
 }
 

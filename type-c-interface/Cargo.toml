@@ -15,6 +15,7 @@ defmt = { workspace = true, optional = true }
 embedded-services.workspace = true
 embedded-usb-pd.workspace = true
 power-policy-interface.workspace = true
+heapless.workspace = true
 
 [lints]
 workspace = true

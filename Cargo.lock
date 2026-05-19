@@ -2262,6 +2262,7 @@ dependencies = [
  "defmt 0.3.100",
  "embedded-services",
  "embedded-usb-pd",
+ "heapless 0.8.0",
  "log",
  "power-policy-interface",
 ]
