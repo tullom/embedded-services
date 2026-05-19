@@ -37,7 +37,7 @@ where
     /// System unconstrained power
     unconstrained: UnconstrainedState,
     /// Connected providers
-    connected_providers: heapless::FnvIndexSet<usize, MAX_CONNECTED_PROVIDERS>,
+    connected_providers: heapless::index_set::FnvIndexSet<usize, MAX_CONNECTED_PROVIDERS>,
 }
 
 impl<PSU: Lockable> Default for InternalState<'_, PSU>
@@ -49,7 +49,7 @@ where
             current_consumer_state: None,
             current_provider_state: provider::State::default(),
             unconstrained: UnconstrainedState::default(),
-            connected_providers: heapless::FnvIndexSet::new(),
+            connected_providers: heapless::index_set::FnvIndexSet::new(),
         }
     }
 }

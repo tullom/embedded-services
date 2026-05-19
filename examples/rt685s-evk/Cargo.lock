@@ -173,7 +173,7 @@ dependencies = [
  "embedded-cfu-protocol",
  "embedded-services",
  "fw-update-interface",
- "heapless 0.8.0",
+ "heapless 0.9.2",
 ]
 
 [[package]]
@@ -1104,7 +1104,7 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embedded-services",
- "heapless 0.8.0",
+ "heapless 0.9.2",
  "power-policy-interface",
 ]
 
@@ -1512,7 +1512,7 @@ dependencies = [
  "defmt 0.3.100",
  "embedded-services",
  "embedded-usb-pd",
- "heapless 0.8.0",
+ "heapless 0.9.2",
  "power-policy-interface",
 ]
 
@@ -1530,7 +1530,7 @@ dependencies = [
  "embedded-services",
  "embedded-usb-pd",
  "fw-update-interface",
- "heapless 0.8.0",
+ "heapless 0.9.2",
  "power-policy-interface",
  "tps6699x",
  "type-c-interface",
