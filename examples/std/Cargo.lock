@@ -96,15 +96,7 @@ dependencies = [
 [[package]]
 name = "bit-register"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/odp-utilities?rev=2f79d238#2f79d238149049d458199a9a9129b54be7893aee"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "bit-register"
-version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/odp-utilities#583015c08ad9855f310bdb25d5cf9abff77b5e08"
+source = "git+https://github.com/OpenDevicePartnership/odp-utilities?tag=v0.1.0#583015c08ad9855f310bdb25d5cf9abff77b5e08"
 dependencies = [
  "num-traits",
 ]
@@ -495,7 +487,7 @@ dependencies = [
 [[package]]
 name = "embedded-cfu-protocol"
 version = "0.2.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-cfu#a4cc8707842b878048447abbf2af4efa79fed368"
+source = "git+https://github.com/OpenDevicePartnership/embedded-cfu?tag=v0.1.0#523a83919c3535e8ccead031d80b715d77395f81"
 dependencies = [
  "embedded-io-async 0.6.1",
  "log",
@@ -653,7 +645,7 @@ dependencies = [
 [[package]]
 name = "embedded-usb-pd"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embedded-usb-pd#21d0e228d21ddc6ccaeffc01d98ef9a5b87941ef"
+source = "git+https://github.com/OpenDevicePartnership/embedded-usb-pd?tag=v0.1.0#0061a1e94a25c8db33ac1e8a0bb5a6b638fe2cd7"
 dependencies = [
  "aquamarine",
  "bincode",
@@ -677,9 +669,9 @@ dependencies = [
 [[package]]
 name = "espi-device"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/haf-ec-service#8cdd61095471903b1b438dbb0eee142676cc3d74"
+source = "git+https://github.com/OpenDevicePartnership/odp-secure-services?tag=v0.1.0#290aa80a4c281857f3bed94581200b330119286c"
 dependencies = [
- "bit-register 0.1.0 (git+https://github.com/OpenDevicePartnership/odp-utilities?rev=2f79d238)",
+ "bit-register",
  "bitflags 2.9.4",
  "num-traits",
  "num_enum",
@@ -888,9 +880,9 @@ dependencies = [
 [[package]]
 name = "mctp-rs"
 version = "0.1.0"
-source = "git+https://github.com/dymk/mctp-rs#4456c65131366acd5e605c7d88a707881fa9e9f0"
+source = "git+https://github.com/OpenDevicePartnership/mctp-rs?tag=v0.1.0#986d6640570a52d6020529926f3914b44872e54a"
 dependencies = [
- "bit-register 0.1.0 (git+https://github.com/OpenDevicePartnership/odp-utilities)",
+ "bit-register",
  "espi-device",
  "num_enum",
  "smbus-pec",
@@ -1401,7 +1393,7 @@ dependencies = [
 [[package]]
 name = "tps6699x"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/tps6699x#ba1b3b17ebf048fc007eb2107a4d2ab8cb545adf"
+source = "git+https://github.com/OpenDevicePartnership/tps6699x?tag=v0.1.0#0c2f495621faf48f4042012e0fb5c1cfc9b29320"
 dependencies = [
  "bincode",
  "bitfield 0.19.2",
