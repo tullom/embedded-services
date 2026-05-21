@@ -1,3 +1,4 @@
+use embedded_services::sync::Lockable;
 use embedded_services::warn;
 use embedded_usb_pd::ucsi::cci::{Cci, GlobalCci};
 use embedded_usb_pd::ucsi::lpm::get_connector_status::{BatteryChargingCapabilityStatus, ConnectorStatusChange};
@@ -7,8 +8,24 @@ use embedded_usb_pd::ucsi::ppm::state_machine::{
 };
 use embedded_usb_pd::ucsi::{GlobalCommand, ResponseData, lpm, ppm};
 use embedded_usb_pd::{PdError, PowerRole};
+use type_c_interface::service::event::{Event, UsciChangeIndicatorData};
+use type_c_interface::ucsi::Lpm as _;
 
 use super::*;
+
+const MAX_SUPPORTED_PORTS: usize = 4;
+
+/// UCSI command response
+#[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct UcsiResponse {
+    /// Notify the OPM, the function call
+    pub notify_opm: bool,
+    /// Response CCI
+    pub cci: GlobalCci,
+    /// UCSI response data
+    pub data: Result<Option<ucsi::ResponseData>, PdError>,
+}
 
 /// UCSI state
 #[derive(Default)]
@@ -28,37 +45,33 @@ pub(super) struct State {
     pub(super) psu_connected: bool,
 }
 
-impl<'a> Service<'a> {
+impl<'port, Reg: Registration<'port>> Service<'port, Reg> {
     /// PPM reset implementation
-    fn process_ppm_reset(&self, state: &mut State) {
+    fn process_ppm_reset(&mut self) {
         debug!("Resetting PPM");
-        state.notifications_enabled = NotificationEnable::default();
-        state.pending_ports.clear();
-        state.valid_battery_charging_capability.clear();
+        self.ucsi.notifications_enabled = NotificationEnable::default();
+        self.ucsi.pending_ports.clear();
+        self.ucsi.valid_battery_charging_capability.clear();
     }
 
     /// Set notification enable implementation
-    fn process_set_notification_enable(&self, state: &mut State, enable: NotificationEnable) {
+    fn process_set_notification_enable(&mut self, enable: NotificationEnable) {
         debug!("Set Notification Enable: {:?}", enable);
-        state.notifications_enabled = enable;
+        self.ucsi.notifications_enabled = enable;
     }
 
     /// PPM get capabilities implementation
     fn process_get_capabilities(&self) -> ppm::ResponseData {
         debug!("Get PPM capabilities: {:?}", self.config.ucsi_capabilities);
         let mut capabilities = self.config.ucsi_capabilities;
-        capabilities.num_connectors = external::get_num_ports() as u8;
+        capabilities.num_connectors = self.registration.ports().len() as u8;
         ppm::ResponseData::GetCapability(capabilities)
     }
 
-    fn process_ppm_command(
-        &self,
-        state: &mut State,
-        command: &ucsi::ppm::Command,
-    ) -> Result<Option<ppm::ResponseData>, PdError> {
+    fn process_ppm_command(&mut self, command: &ucsi::ppm::Command) -> Result<Option<ppm::ResponseData>, PdError> {
         match command {
             ppm::Command::SetNotificationEnable(enable) => {
-                self.process_set_notification_enable(state, enable.notification_enable);
+                self.process_set_notification_enable(enable.notification_enable);
                 Ok(None)
             }
             ppm::Command::GetCapability => Ok(Some(self.process_get_capabilities())),
@@ -69,12 +82,11 @@ impl<'a> Service<'a> {
     /// Determine the battery charging capability status for the given port
     fn determine_battery_charging_capability_status(
         &self,
-        state: &mut State,
         port_id: GlobalPortId,
         port_status: &PortStatus,
     ) -> Option<BatteryChargingCapabilityStatus> {
         if port_status.power_role == PowerRole::Sink {
-            if state.valid_battery_charging_capability.contains(&port_id) && !state.psu_connected {
+            if self.ucsi.valid_battery_charging_capability.contains(&port_id) && !self.ucsi.psu_connected {
                 // Only run this logic when no PSU is attached to prevent excessive notifications
                 // when new type-C PSUs are attached
                 let power_mw = port_status
@@ -94,22 +106,28 @@ impl<'a> Service<'a> {
     }
 
     async fn process_lpm_command(
-        &self,
-        state: &mut super::State,
+        &mut self,
         command: &ucsi::lpm::GlobalCommand,
     ) -> Result<Option<lpm::ResponseData>, PdError> {
         debug!("Processing LPM command: {:?}", command);
+        let mut port = self.lookup_port(command.port())?.lock().await;
+        let local_port_id = self
+            .registration
+            .ucsi_local_port_id(command.port())
+            .ok_or(PdError::InvalidPort)?;
+        let local_command = ucsi::lpm::LocalCommand::new(local_port_id, command.operation());
+
         match command.operation() {
             lpm::CommandData::GetConnectorCapability => {
                 // Override the capabilities if present in the config
                 if let Some(capabilities) = &self.config.ucsi_port_capabilities {
                     Ok(Some(lpm::ResponseData::GetConnectorCapability(*capabilities)))
                 } else {
-                    self.context.execute_ucsi_command(*command).await
+                    port.execute_lpm_command(local_command).await
                 }
             }
             lpm::CommandData::GetConnectorStatus => {
-                let mut response = self.context.execute_ucsi_command(*command).await;
+                let mut response = port.execute_lpm_command(local_command).await;
                 if let Ok(Some(lpm::ResponseData::GetConnectorStatus(lpm::get_connector_status::ResponseData {
                     status_change: ref mut states_change,
                     status:
@@ -120,22 +138,21 @@ impl<'a> Service<'a> {
                     ..
                 }))) = response
                 {
-                    let raw_port = command.port().0 as usize;
-                    let port_status = state.port_status.get(raw_port).ok_or(PdError::InvalidPort)?;
+                    let port_status = port.get_port_status().await?;
                     *battery_charging_status =
-                        self.determine_battery_charging_capability_status(&mut state.ucsi, command.port(), port_status);
+                        self.determine_battery_charging_capability_status(command.port(), &port_status);
                     states_change.set_battery_charging_status_change(battery_charging_status.is_some());
                 }
 
                 response
             }
-            _ => self.context.execute_ucsi_command(*command).await,
+            _ => port.execute_lpm_command(local_command).await,
         }
     }
 
-    /// Upate the CCI connector change field based on the current pending port
-    fn set_cci_connector_change(&self, state: &mut State, cci: &mut GlobalCci) {
-        if let Some(current_port) = state.pending_ports.front() {
+    /// Update the CCI connector change field based on the current pending port
+    fn set_cci_connector_change(&self, cci: &mut GlobalCci) {
+        if let Some(current_port) = self.ucsi.pending_ports.front() {
             // UCSI connector numbers are 1-based
             cci.set_connector_change(GlobalPortId(current_port.0 + 1));
         } else {
@@ -145,33 +162,41 @@ impl<'a> Service<'a> {
     }
 
     /// Acknowledge the current connector change and move to the next if present
-    async fn ack_connector_change(&self, state: &mut State, cci: &mut GlobalCci) {
+    async fn ack_connector_change(&mut self, cci: &mut GlobalCci) {
         // Pop the just acknowledged port and move to the next if present
-        if let Some(_current_port) = state.pending_ports.pop_front() {
-            if let Some(next_port) = state.pending_ports.front() {
-                debug!("ACK_CCI processed, next pending port: {:?}", next_port);
-                self.context
-                    .broadcast_message(comms::CommsMessage::UcsiCci(comms::UsciChangeIndicator {
-                        port: *next_port,
-                        // False here because the OPM gets notified by the CCI, don't need a separate notification
-                        notify_opm: false,
-                    }))
-                    .await;
-            } else {
-                debug!("ACK_CCI processed, no more pending ports");
-            }
-        } else {
+        let Some(_current_port) = self.ucsi.pending_ports.pop_front() else {
             warn!("Received ACK_CCI with no pending connector changes");
-        }
+            return;
+        };
 
-        self.set_cci_connector_change(state, cci);
+        let Some(next_port) = self.ucsi.pending_ports.front() else {
+            debug!("ACK_CCI processed, no more pending ports");
+            return;
+        };
+
+        debug!("ACK_CCI processed, next pending port: {:?}", next_port);
+        let Ok(port) = self.lookup_port(*next_port) else {
+            error!("Invalid port ID in pending ports: {:?}", next_port);
+            return;
+        };
+
+        self.broadcast_event(Event {
+            port,
+            event: EventData::UsciChangeIndicator(UsciChangeIndicatorData {
+                port: *next_port,
+                // False here because the OPM gets notified by the CCI, don't need a separate notification
+                notify_opm: false,
+            }),
+        })
+        .await;
+
+        self.set_cci_connector_change(cci);
     }
 
-    /// Process an external UCSI command
-    pub(super) async fn process_ucsi_command(&self, command: &GlobalCommand) -> external::UcsiResponse {
-        let state = &mut self.state.lock().await;
+    /// Process a UCSI command
+    pub async fn process_ucsi_command(&mut self, command: &GlobalCommand) -> UcsiResponse {
         let mut next_input = Some(PpmInput::Command(command));
-        let mut response: external::UcsiResponse = external::UcsiResponse {
+        let mut response = UcsiResponse {
             notify_opm: false,
             cci: Cci::default(),
             data: Ok(None),
@@ -182,10 +207,10 @@ impl<'a> Service<'a> {
         // Using a loop allows all logic to be centralized
         loop {
             let output = if let Some(next_input) = next_input.take() {
-                state.ucsi.ppm_state_machine.consume(next_input)
+                self.ucsi.ppm_state_machine.consume(next_input)
             } else {
                 error!("Unexpected end of state machine processing");
-                return external::UcsiResponse {
+                return UcsiResponse {
                     notify_opm: true,
                     cci: Cci::new_error(),
                     data: Err(PdError::InvalidMode),
@@ -196,7 +221,7 @@ impl<'a> Service<'a> {
                 Ok(output) => output,
                 Err(e @ InvalidTransition { .. }) => {
                     error!("PPM state machine transition failed: {:#?}", e);
-                    return external::UcsiResponse {
+                    return UcsiResponse {
                         notify_opm: true,
                         cci: Cci::new_error(),
                         data: Err(PdError::Failed),
@@ -212,12 +237,12 @@ impl<'a> Service<'a> {
                         match command {
                             ucsi::GlobalCommand::PpmCommand(ppm_command) => {
                                 response.data = self
-                                    .process_ppm_command(&mut state.ucsi, ppm_command)
+                                    .process_ppm_command(ppm_command)
                                     .map(|inner| inner.map(ResponseData::Ppm));
                             }
                             ucsi::GlobalCommand::LpmCommand(lpm_command) => {
                                 response.data = self
-                                    .process_lpm_command(state, lpm_command)
+                                    .process_lpm_command(lpm_command)
                                     .await
                                     .map(|inner| inner.map(ResponseData::Lpm));
                             }
@@ -226,20 +251,20 @@ impl<'a> Service<'a> {
                         // Don't return yet, need to inform state machine that command is complete
                     }
                     PpmOutput::OpmNotifyCommandComplete => {
-                        response.notify_opm = state.ucsi.notifications_enabled.cmd_complete();
+                        response.notify_opm = self.ucsi.notifications_enabled.cmd_complete();
                         response.cci.set_cmd_complete(true);
                         response.cci.set_error(response.data.is_err());
-                        self.set_cci_connector_change(&mut state.ucsi, &mut response.cci);
+                        self.set_cci_connector_change(&mut response.cci);
                         return response;
                     }
                     PpmOutput::AckComplete(ack) => {
-                        response.notify_opm = state.ucsi.notifications_enabled.cmd_complete();
+                        response.notify_opm = self.ucsi.notifications_enabled.cmd_complete();
                         if ack.command_complete() {
                             response.cci.set_ack_command(true);
                         }
 
                         if ack.connector_change() {
-                            self.ack_connector_change(&mut state.ucsi, &mut response.cci).await;
+                            self.ack_connector_change(&mut response.cci).await;
                         }
 
                         return response;
@@ -247,18 +272,18 @@ impl<'a> Service<'a> {
                     PpmOutput::ResetComplete => {
                         // Resets don't follow the normal command execution flow
                         // So do any reset processing here
-                        self.process_ppm_reset(&mut state.ucsi);
+                        self.process_ppm_reset();
                         // Don't notify OPM because it'll poll
                         response.notify_opm = false;
                         response.cci = Cci::new_reset_complete();
-                        self.set_cci_connector_change(&mut state.ucsi, &mut response.cci);
+                        self.set_cci_connector_change(&mut response.cci);
                         return response;
                     }
                     PpmOutput::OpmNotifyBusy => {
                         // Notify if notifications are enabled in general
-                        response.notify_opm = !state.ucsi.notifications_enabled.is_empty();
+                        response.notify_opm = !self.ucsi.notifications_enabled.is_empty();
                         response.cci.set_busy(true);
-                        self.set_cci_connector_change(&mut state.ucsi, &mut response.cci);
+                        self.set_cci_connector_change(&mut response.cci);
                         return response;
                     }
                 },
@@ -267,7 +292,7 @@ impl<'a> Service<'a> {
                     response.notify_opm = false;
                     response.cci = Cci::default();
                     response.data = Ok(None);
-                    self.set_cci_connector_change(&mut state.ucsi, &mut response.cci);
+                    self.set_cci_connector_change(&mut response.cci);
                     return response;
                 }
             }
@@ -276,12 +301,12 @@ impl<'a> Service<'a> {
 
     /// Handle PD port events, update UCSI state, and generate corresponding UCSI notifications
     pub(super) async fn handle_ucsi_port_event(
-        &self,
+        &mut self,
+        port: &'port Reg::Port,
         port_id: GlobalPortId,
-        port_event: PortStatusChanged,
+        port_event: PortStatusEventBitfield,
         port_status: &PortStatus,
     ) {
-        let state = &mut self.state.lock().await.ucsi;
         let mut ucsi_event = ConnectorStatusChange::default();
 
         ucsi_event.set_connect_change(port_event.plug_inserted_or_removed());
@@ -303,36 +328,51 @@ impl<'a> Service<'a> {
             ucsi_event.set_battery_charging_status_change(true);
 
             // Power negotiation completed, battery charging capability status is now valid
-            if state.valid_battery_charging_capability.insert(port_id).is_err() {
-                error!("Valid battery charging capability overflow for port {:?}", port_id);
+            if self.ucsi.valid_battery_charging_capability.insert(port_id).is_err() {
+                error!(
+                    "({}): Valid battery charging capability overflow",
+                    port.lock().await.name()
+                );
             }
         }
 
         if !port_status.is_connected() {
             // Reset battery charging capability status when disconnected
-            let _ = state.valid_battery_charging_capability.remove(&port_id);
+            let _ = self.ucsi.valid_battery_charging_capability.remove(&port_id);
         }
 
-        if ucsi_event.filter_enabled(state.notifications_enabled).is_empty() {
+        if ucsi_event.filter_enabled(self.ucsi.notifications_enabled).is_empty() {
             trace!("{:?}: event received, but no UCSI notifications enabled", port_id);
             return;
         }
 
-        self.pend_ucsi_port(state, port_id).await;
+        self.pend_ucsi_port(port, port_id).await;
     }
 
     /// Pend UCSI events for all connected ports
-    pub(super) async fn pend_ucsi_connected_ports(&self, state: &mut super::State) {
-        for (port_id, port_status) in state.port_status.iter().enumerate() {
-            if port_status.is_connected() {
-                self.pend_ucsi_port(&mut state.ucsi, GlobalPortId(port_id as u8)).await;
+    pub(super) async fn pend_ucsi_connected_ports(&mut self) {
+        // Panic Safety: i is limited by the length of port_status
+        #[allow(clippy::indexing_slicing)]
+        for i in 0..self.registration.ports().len() {
+            let port_id = GlobalPortId(i as u8);
+            let Some(port) = self.registration.ports().get(i) else {
+                error!("Invalid port ID: {}", i);
+                continue;
+            };
+
+            if let Ok(port_status) = port.lock().await.get_port_status().await {
+                if port_status.is_connected() {
+                    self.pend_ucsi_port(port, port_id).await;
+                }
+            } else {
+                error!("({}): Failed to get status for port", port.lock().await.name());
             }
         }
     }
 
     /// Pend a UCSI event for the given port
-    async fn pend_ucsi_port(&self, state: &mut State, port_id: GlobalPortId) {
-        if state.pending_ports.iter().any(|pending| *pending == port_id) {
+    async fn pend_ucsi_port(&mut self, port: &'port Reg::Port, port_id: GlobalPortId) {
+        if self.ucsi.pending_ports.iter().any(|pending| *pending == port_id) {
             // Already have a pending event for this port, don't need to process it twice
             return;
         }
@@ -340,14 +380,16 @@ impl<'a> Service<'a> {
         // Only notifiy the OPM if we don't have any pending events
         // Once the OPM starts processing events, the next pending port will be sent as part
         // of the CCI response to the ACK_CC_CI command. See [`Self::set_cci_connector_change`]
-        let notify_opm = state.pending_ports.is_empty();
-        if state.pending_ports.push_back(port_id).is_ok() {
-            self.context
-                .broadcast_message(comms::CommsMessage::UcsiCci(comms::UsciChangeIndicator {
+        let notify_opm = self.ucsi.pending_ports.is_empty();
+        if self.ucsi.pending_ports.push_back(port_id).is_ok() {
+            self.broadcast_event(Event {
+                port,
+                event: EventData::UsciChangeIndicator(UsciChangeIndicatorData {
                     port: port_id,
                     notify_opm,
-                }))
-                .await;
+                }),
+            })
+            .await;
         } else {
             // This shouldn't happen because we have a single slot per port
             // Would likely indicate that an invalid port ID got in somehow

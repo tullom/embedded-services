@@ -3,7 +3,7 @@ use embedded_cfu_protocol::protocol_definitions::{
     GetFwVerRespHeaderByte3, GetFwVersionResponse, GetFwVersionResponseHeader, MAX_CMPT_COUNT,
 };
 
-use embedded_services::cfu::component::InternalResponseData;
+use crate::component::InternalResponseData;
 
 const INVALID_FW_VERSION: u32 = u32::MAX;
 

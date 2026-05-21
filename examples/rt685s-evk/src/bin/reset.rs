@@ -50,7 +50,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         // when immediately calling reset below
         blocker.register().expect("Infallible");
 
-        spawner.spawn(reset_watcher(blocker).unwrap());
+        spawner.spawn(reset_watcher(blocker).expect("Failed to spawn reset watcher task"));
     }
 
     // perform reset

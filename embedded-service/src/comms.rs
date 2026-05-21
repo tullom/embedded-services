@@ -53,9 +53,6 @@ pub enum Internal {
     /// Security service provider
     Security,
 
-    /// Time alarm service provider
-    TimeAlarm,
-
     /// OEM defined receiver
     Oem(OemKey),
 }
@@ -101,17 +98,17 @@ impl From<External> for EndpointID {
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Data<'a> {
-    contents: &'a dyn Any,
+    contents: &'a (dyn Any + Send + Sync),
 }
 
 impl<'a> Data<'a> {
     /// Construct a Data portion of a Message from some data input
-    pub fn new(from: &'a impl Any) -> Self {
+    pub fn new(from: &'a (impl Any + Send + Sync)) -> Self {
         Self { contents: from }
     }
 
     /// Attempt to retrieve data as type T -- None if incorrect type
-    pub fn get<T: Any>(&self) -> Option<&T> {
+    pub fn get<T: Any + Send + Sync>(&self) -> Option<&T> {
         self.contents.downcast_ref()
     }
 
@@ -143,7 +140,7 @@ impl<'a> Data<'a> {
     /// if `data.is_a::<MessageClassA>() {}`
     /// else if `data.is_a::<MessageClassB>() {}`
     /// etc.
-    pub fn is_a<T: Any>(&self) -> bool {
+    pub fn is_a<T: Any + Send + Sync>(&self) -> bool {
         self.type_id() == TypeId::of::<T>()
     }
 }
@@ -224,7 +221,7 @@ impl Endpoint {
     }
 
     /// Send a generic message to an endpoint
-    pub async fn send(&self, to: EndpointID, data: &impl Any) -> Result<(), Infallible> {
+    pub async fn send(&self, to: EndpointID, data: &(impl Any + Send + Sync)) -> Result<(), Infallible> {
         send(self.id, to, data).await
     }
 
@@ -280,7 +277,6 @@ fn get_list(target: EndpointID) -> &'static OnceLock<IntrusiveList> {
             static INTERNAL_LIST_NONVOL: OnceLock<IntrusiveList> = OnceLock::new();
             static INTERNAL_LIST_DEBUG: OnceLock<IntrusiveList> = OnceLock::new();
             static INTERNAL_LIST_SECURITY: OnceLock<IntrusiveList> = OnceLock::new();
-            static INTERNAL_LIST_TIME_ALARM: OnceLock<IntrusiveList> = OnceLock::new();
             static INTERNAL_LIST_OEM: OnceLock<IntrusiveList> = OnceLock::new();
 
             match int_endpoint {
@@ -296,7 +292,6 @@ fn get_list(target: EndpointID) -> &'static OnceLock<IntrusiveList> {
                 Nonvol => &INTERNAL_LIST_NONVOL,
                 Debug => &INTERNAL_LIST_DEBUG,
                 Security => &INTERNAL_LIST_SECURITY,
-                TimeAlarm => &INTERNAL_LIST_TIME_ALARM,
                 Oem(_key) => &INTERNAL_LIST_OEM,
             }
         }
@@ -304,7 +299,7 @@ fn get_list(target: EndpointID) -> &'static OnceLock<IntrusiveList> {
 }
 
 /// Send a generic message to an endpoint
-pub async fn send(from: EndpointID, to: EndpointID, data: &impl Any) -> Result<(), Infallible> {
+pub async fn send(from: EndpointID, to: EndpointID, data: &(impl Any + Send + Sync)) -> Result<(), Infallible> {
     route(Message {
         from,
         to,
@@ -342,7 +337,6 @@ pub(crate) fn init() {
     get_list(Internal::Nonvol.into()).get_or_init(IntrusiveList::new);
     get_list(Internal::Debug.into()).get_or_init(IntrusiveList::new);
     get_list(Internal::Security.into()).get_or_init(IntrusiveList::new);
-    get_list(Internal::TimeAlarm.into()).get_or_init(IntrusiveList::new);
     get_list(Internal::Oem(0).into()).get_or_init(IntrusiveList::new);
 
     // initialize external subscriber lists

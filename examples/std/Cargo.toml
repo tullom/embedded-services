@@ -25,31 +25,35 @@ embassy-executor = { version = "0.10.0", features = [
 
 defmt = "0.3"
 
-embedded-usb-pd = { git = "https://github.com/OpenDevicePartnership/embedded-usb-pd", tag = "v0.1.0" }
+embedded-usb-pd = { git = "https://github.com/OpenDevicePartnership/embedded-usb-pd"}
 embedded-services = { path = "../../embedded-service", features = ["log"] }
+odp-service-common = { path = "../../odp-service-common" }
 power-policy-service = { path = "../../power-policy-service", features = [
     "log",
 ] }
+power-policy-interface = { path = "../../power-policy-interface", features = [
+    "log",
+] }
 cfu-service = { path = "../../cfu-service", features = ["log"] }
-embedded-cfu-protocol = { git = "https://github.com/OpenDevicePartnership/embedded-cfu", tag = "v0.1.0" }
+embedded-cfu-protocol = { git = "https://github.com/OpenDevicePartnership/embedded-cfu"}
 
-embedded-batteries-async = "0.3"
-battery-service = { path = "../../battery-service", features = ["log"] }
+battery-service = { path = "../../battery-service", features = ["log", "mock"] }
 type-c-service = { path = "../../type-c-service", features = ["log"] }
+type-c-interface = { path = "../../type-c-interface", features = ["log"] }
 
-embedded-sensors-hal-async = "0.3.0"
-embedded-fans-async = "0.2.0"
-thermal-service = { path = "../../thermal-service", features = ["log"] }
+thermal-service = { path = "../../thermal-service", features = ["log", "mock"] }
+thermal-service-interface = { path = "../../thermal-service-interface" }
 
-env_logger = "0.9.0"
+env_logger = "0.11.8"
 log = "0.4.14"
 static_cell = "2"
-embedded-hal-async = "1.0.0"
-embedded-hal-mock = { version = "0.11.1", features = ["embedded-hal-async"] }
 
 critical-section = { version = "1.1", features = ["std"] }
 
 debug-service = { path = "../../debug-service" }
+debug-service-messages = { path = "../../debug-service-messages" }
+
+embedded-batteries-async = "0.3"
 
 [lib]
 name = "std_examples"
@@ -60,16 +64,8 @@ name = "debug"
 path = "src/bin/debug.rs"
 
 [[bin]]
-name = "type-c-basic"
-path = "src/bin/type_c/basic.rs"
-
-[[bin]]
 name = "type-c-service"
 path = "src/bin/type_c/service.rs"
-
-[[bin]]
-name = "type-c-external"
-path = "src/bin/type_c/external.rs"
 
 [[bin]]
 name = "type-c-unconstrained"

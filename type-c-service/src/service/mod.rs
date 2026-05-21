@@ -1,246 +1,158 @@
-use embassy_futures::select::{Either3, select3};
-use embassy_sync::{
-    mutex::Mutex,
-    pubsub::{DynImmediatePublisher, DynSubscriber},
-};
-use embedded_services::{
-    GlobalRawMutex, debug, error, info, intrusive_list,
-    ipc::deferred,
-    trace,
-    type_c::{
-        self, comms,
-        controller::PortStatus,
-        event::{PortNotificationSingle, PortStatusChanged},
-        external,
-    },
-};
-use embedded_services::{power::policy as power_policy, type_c::Cached};
+use core::marker::PhantomData;
+use core::ptr;
+
+use embedded_services::event::Sender as _;
+use embedded_services::named::Named as _;
+use embedded_services::sync::Lockable;
+use embedded_services::{debug, error, info, trace};
 use embedded_usb_pd::GlobalPortId;
 use embedded_usb_pd::PdError as Error;
+use power_policy_interface::service::event::EventData as PowerPolicyEventData;
+use type_c_interface::control::pd::PortStatus;
+use type_c_interface::port::pd::Pd;
+use type_c_interface::service::event::{DebugAccessoryData, EventData, PortEvent, PortEventData};
 
-use crate::{PortEventStreamer, PortEventVariant};
+use type_c_interface::port::event::PortStatusEventBitfield;
+use type_c_interface::service::event::Event as ServiceEvent;
+
+use crate::service::registration::Registration;
 
 pub mod config;
-mod controller;
-pub mod pd;
-mod port;
+pub mod event_receiver;
 mod power;
+pub mod registration;
 mod ucsi;
-pub mod vdm;
-
-const MAX_SUPPORTED_PORTS: usize = 4;
-
-/// Maximum number of power policy events to buffer
-/// Arbitrary number, but power policy events in general shouldn't be too frequent
-pub const MAX_POWER_POLICY_EVENTS: usize = 4;
-
-/// Type-C service state
-#[derive(Default)]
-struct State {
-    /// Current port status
-    port_status: [PortStatus; MAX_SUPPORTED_PORTS],
-    /// Next port to check, this is used to round-robin through ports
-    port_event_streaming_state: Option<PortEventStreamer>,
-    /// UCSI state
-    ucsi: ucsi::State,
-}
 
 /// Type-C service
-pub struct Service<'a> {
-    /// Type-C context token
-    context: type_c::controller::ContextToken,
-    /// Current state
-    state: Mutex<GlobalRawMutex, State>,
+///
+/// Constructing a Service is the first step in using the Type-C service.
+/// Arguments should be an initialized context
+pub struct Service<'port, Reg: Registration<'port>> {
+    /// UCSI state
+    ucsi: ucsi::State,
     /// Config
     config: config::Config,
-    /// Power policy event receiver
-    ///
-    /// This is the corresponding publisher to [`Self::power_policy_event_subscriber`], power policy events
-    /// will be buffered in the channel until they are brought into the event loop with the subscriber.
-    power_policy_event_publisher: embedded_services::broadcaster::immediate::Receiver<'a, power_policy::CommsMessage>,
-    /// Power policy event subscriber
-    ///
-    /// This is the corresponding subscriber to [`Self::power_policy_event_publisher`], needs to be a mutex because getting a message
-    /// from the channel requires mutable access.
-    power_policy_event_subscriber: Mutex<GlobalRawMutex, DynSubscriber<'a, power_policy::CommsMessage>>,
-}
-
-/// Power policy events
-// This is present instead of just using [`power_policy::CommsMessage`] to allow for
-// supporting variants like `ConsumerConnected(GlobalPortId, ConsumerPowerCapability)`
-// But there's currently not a way to do look-ups between power policy device IDs and GlobalPortIds
-pub enum PowerPolicyEvent {
-    /// Unconstrained state changed
-    Unconstrained(power_policy::UnconstrainedState),
-    /// Consumer disconnected
-    ConsumerDisconnected,
-    /// Consumer connected
-    ConsumerConnected,
+    /// Service registration
+    registration: Reg,
+    _phantom: PhantomData<&'port ()>,
 }
 
 /// Type-C service events
-pub enum Event<'a> {
+#[derive(Clone)]
+pub enum Event<'port, Port: Lockable<Inner: Pd>> {
     /// Port event
-    PortStatusChanged(GlobalPortId, PortStatusChanged, PortStatus),
-    /// A controller notified of an event that occurred.
-    PortNotification(GlobalPortId, PortNotificationSingle),
-    /// External command
-    ExternalCommand(deferred::Request<'a, GlobalRawMutex, external::Command, external::Response<'static>>),
+    PortEvent(PortEvent<'port, Port>),
     /// Power policy event
-    PowerPolicy(PowerPolicyEvent),
+    PowerPolicy(PowerPolicyEventData),
 }
 
-impl<'a> Service<'a> {
+impl<'port, Reg: Registration<'port>> Service<'port, Reg> {
     /// Create a new service the given configuration
-    pub fn create(
-        config: config::Config,
-        power_policy_publisher: DynImmediatePublisher<'a, power_policy::CommsMessage>,
-        power_policy_subscriber: DynSubscriber<'a, power_policy::CommsMessage>,
-    ) -> Option<Self> {
-        Some(Self {
-            context: type_c::controller::ContextToken::create()?,
-            state: Mutex::new(State::default()),
+    pub fn create(config: config::Config, registration: Reg) -> Self {
+        Self {
+            ucsi: ucsi::State::default(),
             config,
-            power_policy_event_publisher: power_policy_publisher.into(),
-            power_policy_event_subscriber: Mutex::new(power_policy_subscriber),
-        })
+            registration,
+            _phantom: PhantomData,
+        }
     }
 
-    /// Get the cached port status
-    pub async fn get_cached_port_status(&self, port_id: GlobalPortId) -> Result<PortStatus, Error> {
-        let state = self.state.lock().await;
-        Ok(*state.port_status.get(port_id.0 as usize).ok_or(Error::InvalidPort)?)
+    fn get_port_index(&self, port: &'port Reg::Port) -> Result<usize, Error> {
+        self.registration
+            .ports()
+            .iter()
+            .position(|p| ptr::eq(*p, port))
+            .ok_or(Error::InvalidPort)
     }
 
-    /// Set the cached port status
-    async fn set_cached_port_status(&self, port_id: GlobalPortId, status: PortStatus) -> Result<(), Error> {
-        let mut state = self.state.lock().await;
-        *state
-            .port_status
-            .get_mut(port_id.0 as usize)
-            .ok_or(Error::InvalidPort)? = status;
-        Ok(())
+    /// Look up the port for a given global port ID
+    fn lookup_port(&self, port_id: GlobalPortId) -> Result<&'port Reg::Port, Error> {
+        self.registration
+            .ports()
+            .get(port_id.0 as usize)
+            .ok_or(Error::InvalidPort)
+            .copied()
+    }
+
+    /// Send an event to all registered listeners
+    async fn broadcast_event(&mut self, event: ServiceEvent<'port, Reg::Port>) {
+        for sender in self.registration.event_senders() {
+            sender.send(event.clone()).await;
+        }
     }
 
     /// Process events for a specific port
-    async fn process_port_event(
-        &self,
-        port_id: GlobalPortId,
-        event: PortStatusChanged,
-        status: PortStatus,
+    async fn process_port_status_event(
+        &mut self,
+        port: &'port Reg::Port,
+        event: PortStatusEventBitfield,
+        new_status: PortStatus,
+        old_status: PortStatus,
     ) -> Result<(), Error> {
-        let old_status = self.get_cached_port_status(port_id).await?;
+        let port_name = { port.lock().await.name() };
 
-        debug!("Port{}: Event: {:#?}", port_id.0, event);
-        debug!("Port{} Previous status: {:#?}", port_id.0, old_status);
-        debug!("Port{} Status: {:#?}", port_id.0, status);
+        debug!("({}): Event: {:#?}", port_name, event);
+        debug!("({}) Previous status: {:#?}", port_name, old_status);
+        debug!("({}) Status: {:#?}", port_name, new_status);
 
-        let connection_changed = status.is_connected() != old_status.is_connected();
-        if connection_changed && (status.is_debug_accessory() || old_status.is_debug_accessory()) {
+        let connection_changed = new_status.is_connected() != old_status.is_connected();
+        if connection_changed && (new_status.is_debug_accessory() || old_status.is_debug_accessory()) {
             // Notify that a debug connection has connected/disconnected
-            if status.is_connected() {
-                debug!("Port{}: Debug accessory connected", port_id.0);
+            if new_status.is_connected() {
+                debug!("({}): Debug accessory connected", port_name);
             } else {
-                debug!("Port{}: Debug accessory disconnected", port_id.0);
+                debug!("({}): Debug accessory disconnected", port_name);
             }
 
-            self.context
-                .broadcast_message(comms::CommsMessage::DebugAccessory(comms::DebugAccessoryMessage {
-                    port: port_id,
-                    connected: status.is_connected(),
-                }))
-                .await;
+            self.broadcast_event(ServiceEvent {
+                port,
+                event: EventData::DebugAccessory(DebugAccessoryData {
+                    connected: new_status.is_connected(),
+                }),
+            })
+            .await;
         }
 
-        self.set_cached_port_status(port_id, status).await?;
-        self.handle_ucsi_port_event(port_id, event, &status).await;
+        self.handle_ucsi_port_event(port, GlobalPortId(self.get_port_index(port)? as u8), event, &new_status)
+            .await;
 
         Ok(())
     }
 
-    /// Process external commands
-    async fn process_external_command(&self, command: &external::Command) -> external::Response<'static> {
-        match command {
-            external::Command::Controller(command) => self.process_external_controller_command(command).await,
-            external::Command::Port(command) => self.process_external_port_command(command).await,
-            external::Command::Ucsi(command) => external::Response::Ucsi(self.process_ucsi_command(command).await),
-        }
-    }
-
-    /// Wait for the next event
-    pub async fn wait_next(&self) -> Result<Event<'_>, Error> {
-        loop {
-            match select3(
-                self.wait_port_flags(),
-                self.context.wait_external_command(),
-                self.wait_power_policy_event(),
-            )
-            .await
-            {
-                Either3::First(mut stream) => {
-                    if let Some((port_id, event)) = stream
-                        .next(|port_id| self.context.get_port_event(GlobalPortId(port_id as u8)))
-                        .await?
-                    {
-                        let port_id = GlobalPortId(port_id as u8);
-                        self.state.lock().await.port_event_streaming_state = Some(stream);
-                        match event {
-                            PortEventVariant::StatusChanged(status_event) => {
-                                // Return a port status changed event
-                                let status = self.context.get_port_status(port_id, Cached(true)).await?;
-                                return Ok(Event::PortStatusChanged(port_id, status_event, status));
-                            }
-                            PortEventVariant::Notification(notification) => {
-                                // Other notifications
-                                trace!("Port notification: {:?}", notification);
-                                return Ok(Event::PortNotification(port_id, notification));
-                            }
-                        }
-                    } else {
-                        self.state.lock().await.port_event_streaming_state = None;
-                    }
-                }
-                Either3::Second(request) => {
-                    return Ok(Event::ExternalCommand(request));
-                }
-                Either3::Third(event) => return Ok(event),
+    async fn process_port_event(&mut self, event: &PortEvent<'port, Reg::Port>) -> Result<(), Error> {
+        match &event.event {
+            PortEventData::StatusChanged(status_event) => {
+                self.process_port_status_event(
+                    event.port,
+                    status_event.status_event,
+                    status_event.current_status,
+                    status_event.previous_status,
+                )
+                .await
+            }
+            unhandled => {
+                // Currently just log notifications, but may want to do more in the future
+                debug!(
+                    "({}): Received notification event: {:#?}",
+                    event.port.lock().await.name(),
+                    unhandled
+                );
+                Ok(())
             }
         }
     }
 
     /// Process the given event
-    pub async fn process_event(&self, event: Event<'_>) -> Result<(), Error> {
+    pub async fn process_event(&mut self, event: Event<'port, Reg::Port>) -> Result<(), Error> {
         match event {
-            Event::PortStatusChanged(port, event_kind, status) => {
-                trace!("Port{}: Processing port status changed", port.0);
-                self.process_port_event(port, event_kind, status).await
-            }
-            Event::PortNotification(port, notification) => {
-                // Other port notifications
-                info!("Port{}: Got port notification: {:?}", port.0, notification);
-                Ok(())
-            }
-            Event::ExternalCommand(request) => {
-                trace!("Processing external command");
-                let response = self.process_external_command(&request.command).await;
-                request.respond(response);
-                Ok(())
+            Event::PortEvent(event) => {
+                trace!("({}): Processing port event", event.port.lock().await.name());
+                self.process_port_event(&event).await
             }
             Event::PowerPolicy(event) => {
                 trace!("Processing power policy event");
                 self.process_power_policy_event(&event).await
             }
         }
-    }
-
-    /// Combined processing function
-    pub async fn process_next_event(&self) -> Result<(), Error> {
-        let event = self.wait_next().await?;
-        self.process_event(event).await
-    }
-
-    /// Register the Type-C service with the power policy service
-    pub fn register_comms(&'static self) -> Result<(), intrusive_list::Error> {
-        power_policy::policy::register_message_receiver(&self.power_policy_event_publisher)
     }
 }

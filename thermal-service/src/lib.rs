@@ -1,162 +1,74 @@
 //! Thermal service
 #![no_std]
-#![allow(clippy::todo)]
-#![allow(clippy::unwrap_used)]
 
-use embassy_sync::once_lock::OnceLock;
-use embedded_sensors_hal_async::temperature::DegreesCelsius;
-use embedded_services::buffer::OwnedRef;
-use embedded_services::ec_type::message::StdHostRequest;
-use embedded_services::{comms, error, info, intrusive_list};
+use thermal_service_interface::{fan::FanService, sensor::SensorService};
 
-mod context;
 pub mod fan;
-pub mod mptf;
+#[cfg(feature = "mock")]
+pub mod mock;
 pub mod sensor;
-pub mod task;
-pub mod utils;
+mod utils;
 
-/// Thermal error
-#[derive(Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Error;
-
-/// Thermal event
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum Event {
-    /// Sensor sampled temperature exceeding a threshold
-    ThresholdExceeded(sensor::DeviceId, sensor::ThresholdType, DegreesCelsius),
-    /// Sensor is no longer exceeding a threshold
-    ThresholdCleared(sensor::DeviceId, sensor::ThresholdType),
-    /// Sensor encountered hardware failure
-    SensorFailure(sensor::DeviceId, sensor::Error),
-    /// Fan encountered hardware failure
-    FanFailure(fan::DeviceId, fan::Error),
+struct ServiceInner<'hw, S: SensorService, F: FanService> {
+    sensors: &'hw [S],
+    fans: &'hw [F],
 }
 
-struct Service<'a> {
-    context: context::Context<'a>,
-    endpoint: comms::Endpoint,
+/// Thermal service handle.
+///
+/// This maintains a list of registered temperature sensors and fans, which can be accessed by instance ID.
+///
+/// To allow for a collection of sensors and fans of different underlying driver types,
+/// type erasure will need to be handled by the user, likely via enum dispatch,
+/// since async traits are not currently dyn compatible.
+#[derive(Clone, Copy)]
+pub struct Service<'hw, S: SensorService, F: FanService> {
+    inner: &'hw ServiceInner<'hw, S, F>,
 }
 
-impl<'a> Service<'a> {
-    fn new() -> Self {
-        Self {
-            context: context::Context::new(),
-            endpoint: comms::Endpoint::uninit(comms::EndpointID::Internal(comms::Internal::Thermal)),
-        }
+/// Parameters required to initialize the thermal service.
+pub struct InitParams<'hw, S: SensorService, F: FanService> {
+    /// Registered temperature sensors.
+    pub sensors: &'hw [S],
+    /// Registered fans.
+    pub fans: &'hw [F],
+}
+
+/// The memory resources required by the thermal service.
+pub struct Resources<'hw, S: SensorService, F: FanService> {
+    inner: Option<ServiceInner<'hw, S, F>>,
+}
+
+// Note: We can't derive Default because the compiler requires S: Default + F: Default bounds,
+// but we don't need that since the default is just the None case
+impl<S: SensorService, F: FanService> Default for Resources<'_, S, F> {
+    fn default() -> Self {
+        Self { inner: None }
     }
 }
 
-impl<'a> comms::MailboxDelegate for Service<'a> {
-    fn receive(&self, message: &comms::Message) -> Result<(), comms::MailboxDelegateError> {
-        // Queue for later processing
-        if let Some(msg) = message.data.get::<StdHostRequest>() {
-            self.context
-                .send_mctp_payload(*msg)
-                .map_err(|_| comms::MailboxDelegateError::BufferFull)
-        } else if let Some(&msg) = message.data.get::<mptf::Request>() {
-            self.context
-                .send_mptf_request(msg)
-                .map_err(|_| comms::MailboxDelegateError::BufferFull)
-        } else {
-            Err(comms::MailboxDelegateError::InvalidData)
-        }
+impl<'hw, S: SensorService, F: FanService> Service<'hw, S, F> {
+    /// Initializes the thermal service with the provided sensors and fans.
+    pub fn init(resources: &'hw mut Resources<'hw, S, F>, init_params: InitParams<'hw, S, F>) -> Self {
+        let inner = resources.inner.insert(ServiceInner {
+            sensors: init_params.sensors,
+            fans: init_params.fans,
+        });
+        Self { inner }
     }
 }
 
-// Just one instance of the service should be running
-static SERVICE: OnceLock<Service> = OnceLock::new();
+impl<'hw, S: SensorService + Copy, F: FanService + Copy> thermal_service_interface::ThermalService
+    for Service<'hw, S, F>
+{
+    type Sensor = S;
+    type Fan = F;
 
-/// This must be called to initialize the Thermal service
-pub async fn init() -> Result<(), Error> {
-    info!("Starting thermal service task");
-    let service = SERVICE.get_or_init(Service::new);
-
-    if comms::register_endpoint(service, &service.endpoint).await.is_err() {
-        error!("Failed to register thermal service endpoint");
-        Err(Error)
-    } else {
-        Ok(())
+    fn sensor(&self, id: u8) -> Option<Self::Sensor> {
+        self.inner.sensors.get(id as usize).copied()
     }
-}
 
-// TODO: Don't like the code duplication from all these wrappers, consider better approach
-
-/// Used to send messages to other services from the Thermal service,
-/// such as notifying the Host of thresholds crossed or the Power service if CRT TEMP is reached.
-pub async fn send_service_msg(to: comms::EndpointID, data: &impl embedded_services::Any) -> Result<(), Error> {
-    // TODO: When this gets updated to return error, handle retrying send on failure
-    SERVICE.get().await.endpoint.send(to, data).await.map_err(|_| Error)?;
-    Ok(())
-}
-
-/// Send a MPTF request
-pub async fn queue_mptf_request(msg: mptf::Request) -> Result<(), Error> {
-    SERVICE.get().await.context.send_mptf_request(msg)
-}
-
-/// Wait for a MPTF request
-pub async fn wait_mptf_request() -> mptf::Request {
-    SERVICE.get().await.context.wait_mptf_request().await
-}
-
-/// Wait for a MCTP payload
-pub async fn wait_mctp_payload() -> StdHostRequest {
-    SERVICE.get().await.context.wait_mctp_payload().await
-}
-
-pub fn get_mctp_buf<'a>() -> &'a OwnedRef<'a, u8> {
-    SERVICE.try_get().unwrap().context.get_mctp_buf()
-}
-
-/// Send a thermal event
-pub async fn send_event(event: Event) {
-    SERVICE.get().await.context.send_event(event).await
-}
-
-/// Wait for a thermal event
-pub async fn wait_event() -> Event {
-    SERVICE.get().await.context.wait_event().await
-}
-
-/// Register a sensor with the thermal service
-pub async fn register_sensor(sensor: &'static sensor::Device) -> Result<(), intrusive_list::Error> {
-    SERVICE.get().await.context.register_sensor(sensor)
-}
-
-/// Provides access to the sensors list
-pub async fn sensors() -> &'static intrusive_list::IntrusiveList {
-    SERVICE.get().await.context.sensors()
-}
-
-/// Find a sensor by its ID
-pub async fn get_sensor(id: sensor::DeviceId) -> Option<&'static sensor::Device> {
-    SERVICE.get().await.context.get_sensor(id)
-}
-
-/// Send a request to a sensor through the thermal service instead of directly.
-pub async fn execute_sensor_request(id: sensor::DeviceId, request: sensor::Request) -> sensor::Response {
-    SERVICE.get().await.context.execute_sensor_request(id, request).await
-}
-
-/// Register a fan with the thermal service
-pub async fn register_fan(fan: &'static fan::Device) -> Result<(), intrusive_list::Error> {
-    SERVICE.get().await.context.register_fan(fan)
-}
-
-/// Provides access to the fans list
-pub async fn fans() -> &'static intrusive_list::IntrusiveList {
-    SERVICE.get().await.context.fans()
-}
-
-/// Find a fan by its ID
-pub async fn get_fan(id: fan::DeviceId) -> Option<&'static fan::Device> {
-    SERVICE.get().await.context.get_fan(id)
-}
-
-/// Send a request to a fan through the thermal service instead of directly.
-pub async fn execute_fan_request(id: fan::DeviceId, request: fan::Request) -> fan::Response {
-    SERVICE.get().await.context.execute_fan_request(id, request).await
+    fn fan(&self, id: u8) -> Option<Self::Fan> {
+        self.inner.fans.get(id as usize).copied()
+    }
 }

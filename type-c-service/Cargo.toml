@@ -17,23 +17,22 @@ workspace = true
 bitfield.workspace = true
 bitflags = { workspace = true }
 defmt = { workspace = true, optional = true }
-embedded-cfu-protocol.workspace = true
 embassy-futures.workspace = true
 embassy-sync.workspace = true
 embassy-time.workspace = true
 embedded-hal-async.workspace = true
 embedded-services.workspace = true
 embedded-usb-pd.workspace = true
+fw-update-interface.workspace = true
 heapless.workspace = true
 log = { workspace = true, optional = true }
-static_cell = { workspace = true }
 tps6699x = { workspace = true, features = ["embassy"] }
+power-policy-interface.workspace = true
+type-c-interface.workspace = true
 
 [dev-dependencies]
 embassy-time = { workspace = true, features = ["std", "generic-queue-8"] }
 embassy-sync = { workspace = true, features = ["std"] }
-critical-section = { workspace = true, features = ["std"] }
-embassy-time-driver = { workspace = true }
 embassy-futures.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
@@ -46,6 +45,9 @@ defmt = [
     "embassy-sync/defmt",
     "tps6699x/defmt",
     "embedded-usb-pd/defmt",
+    "power-policy-interface/defmt",
+    "type-c-interface/defmt",
+    "fw-update-interface/defmt",
 ]
 log = [
     "dep:log",
@@ -53,4 +55,7 @@ log = [
     "embassy-time/log",
     "embassy-sync/log",
     "tps6699x/log",
+    "power-policy-interface/log",
+    "type-c-interface/log",
+    "fw-update-interface/log",
 ]

@@ -18,7 +18,8 @@ embassy-sync.workspace = true
 embassy-time.workspace = true
 embedded-services.workspace = true
 heapless.workspace = true
-uuid.workspace = true
+odp-service-common.workspace = true
+thermal-service-interface.workspace = true
 embedded-fans-async = "0.2.0"
 embedded-sensors-hal-async = "0.3.0"
 
@@ -31,6 +32,7 @@ defmt = [
     "embassy-sync/defmt",
     "embedded-fans-async/defmt",
     "embedded-sensors-hal-async/defmt",
+    "thermal-service-interface/defmt",
 ]
 log = [
     "dep:log",
@@ -38,6 +40,7 @@ log = [
     "embassy-time/log",
     "embassy-sync/log",
 ]
+mock = []
 
 [lints]
 workspace = true

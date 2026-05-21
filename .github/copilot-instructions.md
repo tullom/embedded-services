@@ -6,7 +6,7 @@ This is an embedded controller (EC) services workspace — a collection of `no_s
 
 ## Build, Test, and Lint
 
-Toolchain: Rust 1.88 (`rust-toolchain.toml`), edition 2024. Targets: `x86_64-unknown-linux-gnu` (std/testing) and `thumbv8m.main-none-eabihf` (ARM Cortex-M33).
+Toolchain: Rust 1.90 (`rust-toolchain.toml`), edition 2024. Targets: `x86_64-unknown-linux-gnu` (std/testing) and `thumbv8m.main-none-eabihf` (ARM Cortex-M33).
 
 ```shell
 # Format
@@ -196,3 +196,13 @@ Basic development tools (git, cargo, editors) should not be listed.
 AI agents **must** verify their own identity (agent name and model version) before composing the `Assisted-by` trailer — do not assume or hard-code a model name from a previous session.
 
 AI agents **MUST NOT** add `Signed-off-by` tags. Only humans can certify the Developer Certificate of Origin.
+
+## Rust PR Review Instructions
+CI overview:
+* CI will build the project and run `cargo test` and `cargo clippy`.
+* Feature combinations are checked with `cargo hack`.
+* Do not comment on compile errors, compiler warnings, or clippy warnings.
+
+Pay special attention to...
+* code that uses async selection APIs such as `select`, `selectN`, `select_array`, `select_slice`, or is marked with a drop safety comment. These functions drop the futures that don't finish. Check that values are not lost when this happens.
+* code that could possibly panic or is marked with a panic safety comment.
