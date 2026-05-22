@@ -1,0 +1,254 @@
+//! Device struct and methods
+use embedded_services::named::Named;
+
+use crate::capability::{ConsumerPowerCapability, PowerCapability, ProviderPowerCapability};
+
+pub mod event;
+
+/// Error type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Error {
+    /// The requested device does not exist
+    InvalidDevice,
+    /// The provide request was denied, contains maximum available power
+    CannotProvide(Option<PowerCapability>),
+    /// The consume request was denied, contains maximum available power
+    CannotConsume(Option<PowerCapability>),
+    /// The device is not in the correct state (expected, actual)
+    InvalidState(&'static [StateKind], StateKind),
+    /// Invalid response
+    InvalidResponse,
+    /// Busy, the device cannot respond to the request at this time
+    Busy,
+    /// Timeout
+    Timeout,
+    /// Bus error
+    Bus,
+    /// Charger specific error, underlying error should have more context
+    Charger(crate::charger::ChargerError),
+    /// Generic failure
+    Failed,
+}
+
+/// Most basic device states
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum StateKind {
+    /// No device attached
+    Detached,
+    /// Device is attached
+    Idle,
+    /// Device is actively providing power, USB PD source mode
+    ConnectedProvider,
+    /// Device is actively consuming power, USB PD sink mode
+    ConnectedConsumer,
+}
+
+/// Current state of the power device
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum PsuState {
+    /// Device is attached, but is not currently providing or consuming power
+    Idle,
+    /// Device is attached and is currently providing power
+    ConnectedProvider(ProviderPowerCapability),
+    /// Device is attached and is currently consuming power
+    ConnectedConsumer(ConsumerPowerCapability),
+    /// No device attached
+    Detached,
+}
+
+impl PsuState {
+    /// Returns the corresponding state kind
+    pub fn kind(&self) -> StateKind {
+        match self {
+            PsuState::Idle => StateKind::Idle,
+            PsuState::ConnectedProvider(_) => StateKind::ConnectedProvider,
+            PsuState::ConnectedConsumer(_) => StateKind::ConnectedConsumer,
+            PsuState::Detached => StateKind::Detached,
+        }
+    }
+}
+
+/// Per-device state for power policy implementation
+///
+/// This struct implements the state machine outlined in the docs directory.
+/// The various state transition functions always succeed in the sense that
+/// the desired state is always entered, but some still return a result.
+/// This is because a the device that is driving this state machine is the
+/// ultimate source of truth and the recovery procedure would ultimately
+/// end up catching up to this state anyway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct State {
+    /// Current state of the device
+    pub psu_state: PsuState,
+    /// Current consumer capability
+    pub consumer_capability: Option<ConsumerPowerCapability>,
+    /// Current requested provider capability
+    pub requested_provider_capability: Option<ProviderPowerCapability>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            psu_state: PsuState::Detached,
+            consumer_capability: None,
+            requested_provider_capability: None,
+        }
+    }
+}
+
+impl State {
+    /// Attach the device
+    pub fn attach(&mut self) -> Result<(), Error> {
+        let result = if self.psu_state == PsuState::Detached {
+            Ok(())
+        } else {
+            Err(Error::InvalidState(&[StateKind::Detached], self.psu_state.kind()))
+        };
+        self.psu_state = PsuState::Idle;
+        result
+    }
+
+    /// Detach the device
+    ///
+    /// Detach is always a valid transition
+    pub fn detach(&mut self) {
+        self.psu_state = PsuState::Detached;
+        self.consumer_capability = None;
+        self.requested_provider_capability = None;
+    }
+
+    /// Disconnect this device
+    pub fn disconnect(&mut self, clear_caps: bool) -> Result<(), Error> {
+        let result = if matches!(
+            self.psu_state,
+            PsuState::ConnectedConsumer(_) | PsuState::ConnectedProvider(_) | PsuState::Idle
+        ) {
+            Ok(())
+        } else {
+            Err(Error::InvalidState(
+                &[
+                    StateKind::ConnectedConsumer,
+                    StateKind::ConnectedProvider,
+                    StateKind::Idle,
+                ],
+                self.psu_state.kind(),
+            ))
+        };
+        self.psu_state = PsuState::Idle;
+        if clear_caps {
+            self.consumer_capability = None;
+            self.requested_provider_capability = None;
+        }
+        result
+    }
+
+    /// Update the available consumer capability
+    pub fn update_consumer_power_capability(
+        &mut self,
+        capability: Option<ConsumerPowerCapability>,
+    ) -> Result<(), Error> {
+        let result = match self.psu_state {
+            PsuState::Idle | PsuState::ConnectedConsumer(_) | PsuState::ConnectedProvider(_) => Ok(()),
+            _ => Err(Error::InvalidState(
+                &[
+                    StateKind::Idle,
+                    StateKind::ConnectedConsumer,
+                    StateKind::ConnectedProvider,
+                ],
+                self.psu_state.kind(),
+            )),
+        };
+        self.consumer_capability = capability;
+        result
+    }
+
+    /// Update the requested provider capability
+    pub fn update_requested_provider_power_capability(
+        &mut self,
+        capability: Option<ProviderPowerCapability>,
+    ) -> Result<(), Error> {
+        if self.requested_provider_capability == capability {
+            // Already operating at this capability, power policy is already aware, don't need to do anything
+            return Ok(());
+        }
+
+        let result = match self.psu_state {
+            PsuState::Idle | PsuState::ConnectedConsumer(_) | PsuState::ConnectedProvider(_) => Ok(()),
+            _ => Err(Error::InvalidState(
+                &[
+                    StateKind::Idle,
+                    StateKind::ConnectedProvider,
+                    StateKind::ConnectedConsumer,
+                ],
+                self.psu_state.kind(),
+            )),
+        };
+
+        self.requested_provider_capability = capability;
+        result
+    }
+
+    /// Check if a request to connect as a consumer from the policy is valid given the current state
+    /// Returns () or the error with information about why the request is invalid
+    pub fn can_connect_consumer(&self) -> Result<(), Error> {
+        match self.psu_state {
+            PsuState::Idle | PsuState::ConnectedConsumer(_) => Ok(()),
+            _ => Err(Error::InvalidState(
+                &[StateKind::Idle, StateKind::ConnectedConsumer],
+                self.psu_state.kind(),
+            )),
+        }
+    }
+
+    /// Handle a request to connect as a consumer from the policy
+    pub fn connect_consumer(&mut self, capability: ConsumerPowerCapability) -> Result<(), Error> {
+        self.can_connect_consumer()?;
+        self.psu_state = PsuState::ConnectedConsumer(capability);
+        Ok(())
+    }
+
+    /// Check if a request to connect as a provider from the policy is valid given the current state
+    /// Returns () or the error with information about why the request is invalid
+    pub fn can_connect_provider(&self) -> Result<(), Error> {
+        match self.psu_state {
+            PsuState::Idle | PsuState::ConnectedProvider(_) => Ok(()),
+            _ => Err(Error::InvalidState(
+                &[StateKind::Idle, StateKind::ConnectedProvider],
+                self.psu_state.kind(),
+            )),
+        }
+    }
+
+    /// Handle a request to connect as a provider from the policy
+    pub fn connect_provider(&mut self, capability: ProviderPowerCapability) -> Result<(), Error> {
+        self.can_connect_provider()?;
+        self.psu_state = PsuState::ConnectedProvider(capability);
+        Ok(())
+    }
+
+    /// Returns the current provider capability if the PSU is connected as a provider
+    pub fn connected_provider_capability(&self) -> Option<ProviderPowerCapability> {
+        match self.psu_state {
+            PsuState::ConnectedProvider(capability) => Some(capability),
+            _ => None,
+        }
+    }
+}
+
+/// Trait for PSU devices
+pub trait Psu: Named {
+    /// Disconnect power from this device
+    fn disconnect(&mut self) -> impl Future<Output = Result<(), Error>>;
+    /// Connect this device to provide power to an external connection
+    fn connect_provider(&mut self, capability: ProviderPowerCapability) -> impl Future<Output = Result<(), Error>>;
+    /// Connect this device to consume power from an external connection
+    fn connect_consumer(&mut self, capability: ConsumerPowerCapability) -> impl Future<Output = Result<(), Error>>;
+    /// Return an immutable reference to the current PSU state
+    fn state(&self) -> &State;
+    /// Return a mutable reference to the current PSU state
+    fn state_mut(&mut self) -> &mut State;
+}

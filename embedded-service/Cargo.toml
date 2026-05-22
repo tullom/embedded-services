@@ -12,18 +12,12 @@ workspace = true
 
 [dependencies]
 bitfield.workspace = true
-bitvec.workspace = true
 critical-section.workspace = true
 defmt = { workspace = true, optional = true }
 embassy-sync.workspace = true
-embassy-time.workspace = true
-embedded-batteries-async.workspace = true
-embedded-cfu-protocol.workspace = true
-embedded-usb-pd.workspace = true
-heapless.workspace = true
+embassy-futures.workspace = true
 log = { workspace = true, optional = true }
-num_enum.workspace = true
-uuid.workspace = true
+paste.workspace = true
 
 [dependencies.mctp-rs]
 workspace = true
@@ -36,34 +30,16 @@ features = ["serde_derive"]
 [target.'cfg(not(target_has_atomic = "ptr"))'.dependencies]
 portable-atomic.workspace = true
 
-[target.'cfg(target_os = "none")'.dependencies]
-cortex-m-rt.workspace = true
+[target.'cfg(all(target_os = "none", target_arch = "arm"))'.dependencies]
 cortex-m.workspace = true
 
 [dev-dependencies]
 critical-section = { workspace = true, features = ["std"] }
-embassy-futures.workspace = true
 embassy-sync = { workspace = true, features = ["std"] }
-embassy-time = { workspace = true, features = ["std", "generic-queue-8"] }
-embassy-time-driver = { workspace = true }
-rstest.workspace = true
 static_cell.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [features]
 default = []
-defmt = [
-    "dep:defmt",
-    "embassy-sync/defmt",
-    "embassy-time/defmt",
-    "embedded-usb-pd/defmt",
-    "embedded-cfu-protocol/defmt",
-    "embedded-batteries-async/defmt",
-    "mctp-rs/defmt",
-]
-log = [
-    "dep:log",
-    "embassy-sync/log",
-    "embassy-time/log",
-    "embedded-cfu-protocol/log",
-]
+defmt = ["dep:defmt", "embassy-sync/defmt", "mctp-rs/defmt"]
+log = ["dep:log", "embassy-sync/log"]

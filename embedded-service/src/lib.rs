@@ -14,17 +14,25 @@ pub mod thread_mode_cell;
 pub mod activity;
 pub mod broadcaster;
 pub mod buffer;
-pub mod cfu;
 pub mod comms;
-pub mod ec_type;
+pub mod event;
 pub mod fmt;
 pub mod hid;
 pub mod init;
 pub mod ipc;
 pub mod keyboard;
-pub mod power;
+pub mod named;
+pub mod relay;
 pub mod sync;
-pub mod type_c;
+
+/// Hidden re-exports used by macros defined in this crate.
+/// Not part of the public API — do not depend on these directly.
+#[doc(hidden)]
+pub mod _macro_internal {
+    pub use bitfield;
+    pub use mctp_rs;
+    pub use paste;
+}
 
 /// Global Mutex type, ThreadModeRawMutex is used in a microcontroller context, whereas CriticalSectionRawMutex is used
 /// in a standard context for unit testing.
@@ -75,8 +83,5 @@ pub type Never = core::convert::Infallible;
 pub async fn init() {
     comms::init();
     activity::init();
-    cfu::init();
     keyboard::init();
-    power::policy::init();
-    type_c::controller::init();
 }

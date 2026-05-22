@@ -1,0 +1,110 @@
+// Panicking is how tests communicate failure, so we need to allow it here.
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+
+#[cfg(test)]
+mod test {
+    use embassy_time::Timer;
+    use embedded_mcu_hal::time::{Datetime, DatetimeClock};
+    use odp_service_common::runnable_service::{Service, ServiceRunner};
+
+    use time_alarm_service_interface::{AcpiDaylightSavingsTimeStatus, AcpiTimeZone, AcpiTimestamp, TimeAlarmService};
+
+    use time_alarm_service::mock::*;
+
+    #[tokio::test]
+    async fn test_get_time() {
+        let mut tz_storage = MockNvramStorage::new(0);
+        let mut ac_exp_storage = MockNvramStorage::new(0);
+        let mut ac_pol_storage = MockNvramStorage::new(0);
+        let mut dc_exp_storage = MockNvramStorage::new(0);
+        let mut dc_pol_storage = MockNvramStorage::new(0);
+
+        let mut clock = MockDatetimeClock::new_running();
+        let mut storage = Default::default();
+
+        let (service, runner) = time_alarm_service::Service::new(
+            &mut storage,
+            time_alarm_service::InitParams {
+                backing_clock: &mut clock,
+                tz_storage: &mut tz_storage,
+                ac_expiration_storage: &mut ac_exp_storage,
+                ac_policy_storage: &mut ac_pol_storage,
+                dc_expiration_storage: &mut dc_exp_storage,
+                dc_policy_storage: &mut dc_pol_storage,
+            },
+        )
+        .await
+        .unwrap();
+
+        // We need to have the service have non-static lifetime for our test use cases so we can have
+        // multiple test cases.  This means we can't spawn tasks that require 'static lifetime.
+        //
+        // Instead, we'll use select! to run the worker task in the local scope, which lets us take
+        // borrows from the stack and not require 'static.  The worker task is expected to
+        // return !, so we should go until the test arm completes and then shut down.
+        //
+        tokio::select! {
+            _ = runner.run() => unreachable!("time alarm service task finished unexpectedly"),
+            _ = async {
+                let delay_secs = 2;
+                let begin = service.get_real_time().unwrap();
+                println!("Current time from service: {begin:?}");
+                Timer::after(embassy_time::Duration::from_millis(delay_secs * 1000)).await;
+                let end = service.get_real_time().unwrap();
+                println!("Current time from service after delay: {end:?}");
+                assert!(end.datetime.unix_timestamp() - begin.datetime.unix_timestamp() <= delay_secs + 1);
+                assert!(end.datetime.unix_timestamp() - begin.datetime.unix_timestamp() >= delay_secs - 1);
+            } => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_time() {
+        let mut tz_storage = MockNvramStorage::new(0);
+        let mut ac_exp_storage = MockNvramStorage::new(0);
+        let mut ac_pol_storage = MockNvramStorage::new(0);
+        let mut dc_exp_storage = MockNvramStorage::new(0);
+        let mut dc_pol_storage = MockNvramStorage::new(0);
+
+        let mut clock = MockDatetimeClock::new_paused();
+        const TEST_UNIX_TIME: u64 = 1_234_567_890;
+        clock.set(Datetime::from_unix_timestamp(TEST_UNIX_TIME)).unwrap();
+
+        let mut storage = Default::default();
+
+        let (service, runner) = time_alarm_service::Service::new(
+            &mut storage,
+            time_alarm_service::InitParams {
+                backing_clock: &mut clock,
+                tz_storage: &mut tz_storage,
+                ac_expiration_storage: &mut ac_exp_storage,
+                ac_policy_storage: &mut ac_pol_storage,
+                dc_expiration_storage: &mut dc_exp_storage,
+                dc_policy_storage: &mut dc_pol_storage,
+            },
+        )
+        .await
+        .unwrap();
+
+        tokio::select! {
+            _ = runner.run() => unreachable!("time alarm service task finished unexpectedly"),
+            _ = async {
+                // Clock is paused, so time shouldn't advance unless we set it.
+                let begin = service.get_real_time().unwrap();
+                assert_eq!(begin.datetime.unix_timestamp(), TEST_UNIX_TIME);
+
+                let target_timestamp = AcpiTimestamp {
+                    datetime: Datetime::from_unix_timestamp(TEST_UNIX_TIME),
+                    time_zone: AcpiTimeZone::Unknown,
+                    dst_status: AcpiDaylightSavingsTimeStatus::Adjusted,
+                };
+                service.set_real_time(target_timestamp).unwrap();
+
+                let actual_timestamp = service.get_real_time().unwrap();
+                assert_eq!(actual_timestamp, target_timestamp);
+
+            } => {}
+        }
+    }
+}

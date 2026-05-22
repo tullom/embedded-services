@@ -1,0 +1,33 @@
+[package]
+name = "uart-service"
+version = "0.1.0"
+edition = "2024"
+description = "UART embedded service implementation"
+repository = "https://github.com/OpenDevicePartnership/embedded-services"
+rust-version = "1.88"
+license = "MIT"
+
+[package.metadata.cargo-machete]
+ignored = ["log"]
+
+[lints]
+workspace = true
+
+[dependencies]
+embedded-services.workspace = true
+defmt = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
+embassy-sync.workspace = true
+mctp-rs = { workspace = true }
+embedded-io-async.workspace = true
+
+[features]
+default = []
+defmt = [
+    "dep:defmt",
+    "embedded-services/defmt",
+    "embassy-sync/defmt",
+    "mctp-rs/defmt",
+]
+
+log = ["dep:log", "embedded-services/log"]
