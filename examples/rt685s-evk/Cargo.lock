@@ -471,7 +471,7 @@ dependencies = [
  "embedded-io 0.7.1",
  "embedded-io-async 0.6.1",
  "embedded-io-async 0.7.0",
- "embedded-mcu-hal",
+ "embedded-mcu-hal 0.2.0",
  "embedded-storage",
  "fixed",
  "itertools 0.11.0",
@@ -589,6 +589,9 @@ name = "embedded-hal"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
+dependencies = [
+ "defmt 0.3.100",
+]
 
 [[package]]
 name = "embedded-hal-async"
@@ -596,6 +599,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c4c685bbef7fe13c3c6dd4da26841ed3980ef33e841cddfa15ce8a8fb3f1884"
 dependencies = [
+ "defmt 0.3.100",
  "embedded-hal 1.0.0",
 ]
 
@@ -650,6 +654,19 @@ checksum = "f02b992c2b871b7fc616e4539258d92ea8b085e2f09cc0ad2862aa4d0e185ad1"
 dependencies = [
  "defmt 1.1.0",
  "num_enum",
+]
+
+[[package]]
+name = "embedded-mcu-hal"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0563f27b8ea59eb57e2c5926db6ee311d0a24ab9912adf82b9f418cc9799b0ff"
+dependencies = [
+ "defmt 1.1.0",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "num_enum",
+ "smbus-pec",
 ]
 
 [[package]]
@@ -1198,7 +1215,7 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embedded-cfu-protocol",
- "embedded-mcu-hal",
+ "embedded-mcu-hal 0.2.0",
  "embedded-services",
  "embedded-usb-pd",
  "mimxrt600-fcb 0.1.0",
@@ -1405,7 +1422,7 @@ dependencies = [
  "embassy-futures",
  "embassy-sync",
  "embassy-time",
- "embedded-mcu-hal",
+ "embedded-mcu-hal 0.3.0",
  "embedded-services",
  "odp-service-common",
  "time-alarm-service-interface",
@@ -1418,7 +1435,7 @@ version = "0.1.0"
 dependencies = [
  "bitfield 0.17.0",
  "defmt 0.3.100",
- "embedded-mcu-hal",
+ "embedded-mcu-hal 0.3.0",
  "num_enum",
  "zerocopy",
 ]
@@ -1428,7 +1445,7 @@ name = "time-alarm-service-relay"
 version = "0.1.0"
 dependencies = [
  "defmt 0.3.100",
- "embedded-mcu-hal",
+ "embedded-mcu-hal 0.3.0",
  "embedded-services",
  "num_enum",
  "time-alarm-service-interface",
