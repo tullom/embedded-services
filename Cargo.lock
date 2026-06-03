@@ -558,7 +558,7 @@ dependencies = [
 [[package]]
 name = "embassy-imxrt"
 version = "0.1.0"
-source = "git+https://github.com/OpenDevicePartnership/embassy-imxrt#6524cbabcc12016f1aea4c0ffa2f1354c3f8c6d1"
+source = "git+https://github.com/OpenDevicePartnership/embassy-imxrt#8b9a6f0e11d9b65f1616a9e487af2cf04aef3584"
 dependencies = [
  "cfg-if",
  "cortex-m",
@@ -581,7 +581,7 @@ dependencies = [
  "embedded-io 0.7.1",
  "embedded-io-async 0.6.1",
  "embedded-io-async 0.7.0",
- "embedded-mcu-hal 0.2.0",
+ "embedded-mcu-hal",
  "embedded-storage",
  "fixed",
  "itertools 0.11.0",
@@ -778,16 +778,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2564b9f813c544241430e147d8bc454815ef9ac998878d30cc3055449f7fd4c0"
 dependencies = [
  "embedded-io 0.7.1",
-]
-
-[[package]]
-name = "embedded-mcu-hal"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f02b992c2b871b7fc616e4539258d92ea8b085e2f09cc0ad2862aa4d0e185ad1"
-dependencies = [
- "defmt 1.1.0",
- "num_enum",
 ]
 
 [[package]]
@@ -1995,7 +1985,7 @@ dependencies = [
  "embassy-futures",
  "embassy-sync",
  "embassy-time",
- "embedded-mcu-hal 0.3.0",
+ "embedded-mcu-hal",
  "embedded-services",
  "log",
  "odp-service-common",
@@ -2011,7 +2001,7 @@ version = "0.1.0"
 dependencies = [
  "bitfield 0.17.0",
  "defmt 0.3.100",
- "embedded-mcu-hal 0.3.0",
+ "embedded-mcu-hal",
  "log",
  "num_enum",
  "zerocopy",
@@ -2022,7 +2012,7 @@ name = "time-alarm-service-relay"
 version = "0.1.0"
 dependencies = [
  "defmt 0.3.100",
- "embedded-mcu-hal 0.3.0",
+ "embedded-mcu-hal",
  "embedded-services",
  "log",
  "num_enum",
