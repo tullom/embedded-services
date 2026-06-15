@@ -11,7 +11,11 @@ use core::future::Future;
 
 use embedded_batteries_async::{
     acpi::{BmcControlFlags, BmdCapabilityFlags, BmdStatusFlags, PowerThresholdSupport},
-    smart_battery::BatteryModeFields,
+    charger::{MilliAmps, MilliVolts},
+    smart_battery::{
+        BatteryModeFields, CapacityModeSignedValue, CapacityModeValue, Cycles, DeciKelvin, ManufactureDate,
+        MilliAmpsSigned, Minutes, Percent,
+    },
 };
 
 /// Fuel gauge errors.
@@ -43,7 +47,7 @@ pub const DEVICE_CHEMISTRY_ID_SIZE: usize = 2;
 pub const SERIAL_NUM_SIZE: usize = 4;
 
 /// Standard static battery data cache.
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct StaticBatteryMsgs {
     /// Manufacturer Name.
@@ -55,11 +59,11 @@ pub struct StaticBatteryMsgs {
     /// Device Chemistry.
     pub device_chemistry: [u8; DEVICE_CHEMISTRY_SIZE],
 
-    /// Design Capacity in mWh.
-    pub design_capacity_mwh: u32,
+    /// Design Capacity. Units (mA/mAh or centiWatt) are encoded by the [`CapacityModeValue`] variant.
+    pub design_capacity: CapacityModeValue,
 
     /// Design Voltage in mV.
-    pub design_voltage_mv: u16,
+    pub design_voltage: MilliVolts,
 
     /// Device Chemistry Id.
     pub device_chemistry_id: [u8; DEVICE_CHEMISTRY_ID_SIZE],
@@ -70,94 +74,278 @@ pub struct StaticBatteryMsgs {
     /// Battery Mode.
     pub battery_mode: BatteryModeFields,
 
-    pub design_cap_warning: u32,
+    /// Warning (OEM-designed) capacity threshold.
+    ///
+    /// Units (mA/mAh or centiWatt) are encoded by the [`CapacityModeValue`] variant.
+    pub design_cap_warning: CapacityModeValue,
 
-    pub design_cap_low: u32,
+    /// Low (OEM-designed) capacity threshold.
+    ///
+    /// Units (mA/mAh or centiWatt) are encoded by the [`CapacityModeValue`] variant.
+    pub design_cap_low: CapacityModeValue,
 
+    /// Measurement accuracy in thousandths of a percent (e.g. `80_000` = 80.000%).
     pub measurement_accuracy: u32,
 
+    /// Maximum supported sampling time, in milliseconds.
     pub max_sample_time: u32,
 
+    /// Minimum supported sampling time, in milliseconds.
     pub min_sample_time: u32,
 
+    /// Maximum supported averaging interval, in milliseconds.
     pub max_averaging_interval: u32,
 
+    /// Minimum supported averaging interval, in milliseconds.
     pub min_averaging_interval: u32,
 
-    pub cap_granularity_1: u32,
+    /// Capacity measurement granularity between the low and warning thresholds.
+    ///
+    /// Units (mA/mAh or centiWatt) are encoded by the [`CapacityModeValue`] variant.
+    pub cap_granularity_1: CapacityModeValue,
 
-    pub cap_granularity_2: u32,
+    /// Capacity measurement granularity between the warning and full thresholds.
+    ///
+    /// Units (mA/mAh or centiWatt) are encoded by the [`CapacityModeValue`] variant.
+    pub cap_granularity_2: CapacityModeValue,
 
+    /// Which peak-power thresholds the platform supports (ACPI `_BPC`).
     pub power_threshold_support: PowerThresholdSupport,
 
+    /// Maximum supported threshold for instantaneous peak power, in mW.
     pub max_instant_pwr_threshold: u32,
 
+    /// Maximum supported threshold for sustainable peak power, in mW.
     pub max_sus_pwr_threshold: u32,
 
+    /// Battery maintenance control flags configuring calibration and charger behavior (ACPI `_BMC`).
     pub bmc_flags: BmcControlFlags,
 
+    /// Battery maintenance capability flags indicating supported maintenance features (ACPI `_BMD`).
     pub bmd_capability: BmdCapabilityFlags,
 
+    /// Recommended recalibration count.
+    ///
+    /// `0` means only recalibrate when the recalibration status flag is set;
+    /// otherwise recalibrate after this many battery cycles.
     pub bmd_recalibrate_count: u32,
 
+    /// Estimated time, in seconds, to recalibrate if the system enters standby.
+    ///
+    /// `0` indicates standby is not supported and `0xFFFF_FFFF` indicates the
+    /// time is unknown.
     pub bmd_quick_recalibrate_time: u32,
 
+    /// Estimated time, in seconds, to recalibrate without standby.
+    ///
+    /// `0` indicates calibration may not succeed and `0xFFFF_FFFF` indicates the
+    /// time is unknown.
     pub bmd_slow_recalibrate_time: u32,
+
+    /// Manufacture Date. Fixed manufacturing datum, so cached as static data.
+    pub manufacture_date: ManufactureDate,
+
+    /// Specification Info, stored as the raw `u16` bitfield representation.
+    pub specification_info: u16,
+
+    /// Remaining (low) Capacity Alarm threshold. Units (mA/mAh or centiWatt) are encoded by the [`CapacityModeValue`] variant.
+    pub remaining_capacity_alarm: CapacityModeValue,
+
+    /// Remaining Time Alarm threshold in minutes.
+    pub remaining_time_alarm: Minutes,
+}
+
+impl Default for StaticBatteryMsgs {
+    fn default() -> Self {
+        Self {
+            // Capacity quantities default to the mA variant (matching the SBS
+            // default capacity mode); they have no `Default` of their own.
+            design_capacity: CapacityModeValue::MilliAmpUnsigned(0),
+            remaining_capacity_alarm: CapacityModeValue::MilliAmpUnsigned(0),
+            design_cap_warning: CapacityModeValue::MilliAmpUnsigned(0),
+            design_cap_low: CapacityModeValue::MilliAmpUnsigned(0),
+            cap_granularity_1: CapacityModeValue::MilliAmpUnsigned(0),
+            cap_granularity_2: CapacityModeValue::MilliAmpUnsigned(0),
+            manufacturer_name: Default::default(),
+            device_name: Default::default(),
+            device_chemistry: Default::default(),
+            design_voltage: Default::default(),
+            device_chemistry_id: Default::default(),
+            serial_num: Default::default(),
+            battery_mode: Default::default(),
+            measurement_accuracy: Default::default(),
+            max_sample_time: Default::default(),
+            min_sample_time: Default::default(),
+            max_averaging_interval: Default::default(),
+            min_averaging_interval: Default::default(),
+            power_threshold_support: Default::default(),
+            max_instant_pwr_threshold: Default::default(),
+            max_sus_pwr_threshold: Default::default(),
+            bmc_flags: Default::default(),
+            bmd_capability: Default::default(),
+            bmd_recalibrate_count: Default::default(),
+            bmd_quick_recalibrate_time: Default::default(),
+            bmd_slow_recalibrate_time: Default::default(),
+            manufacture_date: Default::default(),
+            specification_info: Default::default(),
+            remaining_time_alarm: Default::default(),
+        }
+    }
 }
 
 /// Standard dynamic battery data cache.
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct DynamicBatteryMsgs {
     /// Battery Max Power in mW.
-    pub max_power_mw: u32,
+    pub max_power: u32,
 
     /// Battery Sustained Power in mW.
-    pub sus_power_mw: u32,
+    pub sus_power: u32,
 
     /// Turbo Load Voltage in mV.
-    pub turbo_vload_mv: u32,
+    pub turbo_vload: u32,
 
     /// Turbo RHF Effective in mOhm.
-    pub turbo_rhf_effective_mohm: u32,
+    pub turbo_rhf_effective: u32,
 
-    /// Full Charge Capacity in mWh.
-    pub full_charge_capacity_mwh: u32,
+    /// Full Charge Capacity. Units (mA/mAh or centiWatt) are encoded by the [`CapacityModeValue`] variant.
+    pub full_charge_capacity: CapacityModeValue,
 
-    /// Remaining Capacity in mWh.
-    pub remaining_capacity_mwh: u32,
+    /// Remaining Capacity. Units (mA/mAh or centiWatt) are encoded by the [`CapacityModeValue`] variant.
+    pub remaining_capacity: CapacityModeValue,
 
     /// Rsoc in %.
-    pub relative_soc_pct: u16,
+    pub relative_soc: Percent,
 
     /// Charge/Discharge Cycle Count.
-    pub cycle_count: u16,
+    pub cycle_count: Cycles,
 
     /// Battery Voltage in mV.
-    pub voltage_mv: u16,
+    pub voltage: MilliVolts,
 
     /// Maximum Error in %.
-    pub max_error_pct: u16,
+    pub max_error: Percent,
 
     /// Battery Status (Standard Smart Battery Defined).
     pub battery_status: u16,
 
     /// Desired Charging Voltage in mV.
-    pub charging_voltage_mv: u16,
+    pub charging_voltage: MilliVolts,
 
     /// Desired Charging Current in mA.
-    pub charging_current_ma: u16,
+    pub charging_current: MilliAmps,
 
     /// Battery Temperature in dK.
-    pub battery_temp_dk: u16,
+    pub battery_temp: DeciKelvin,
 
     /// Battery Current in mA.
-    pub current_ma: i16,
+    pub current: MilliAmpsSigned,
 
     /// Battery Avg Current.
-    pub average_current_ma: i16,
+    pub average_current: MilliAmpsSigned,
 
+    /// Battery maintenance status flags indicating the current battery maintenance state (ACPI `_BMD`).
     pub bmd_status: BmdStatusFlags,
+
+    /// Absolute State of Charge in % (relative to design capacity).
+    pub absolute_soc: Percent,
+
+    /// AtRate value. Units (mA or centiWatt) are encoded by the [`CapacityModeSignedValue`] variant.
+    ///
+    /// Host-written scratch value that drives the AtRate predictions below, so
+    /// cached as dynamic data.
+    pub at_rate: CapacityModeSignedValue,
+
+    /// Whether the battery can supply the AtRate value for at least 10 seconds.
+    pub at_rate_ok: bool,
+
+    /// Predicted time to fully charge at the AtRate value, in minutes.
+    pub at_rate_time_to_full: Minutes,
+
+    /// Predicted time to fully discharge at the AtRate value, in minutes.
+    pub at_rate_time_to_empty: Minutes,
+
+    /// Predicted remaining run time to empty at the present discharge rate, in minutes.
+    pub run_time_to_empty: Minutes,
+
+    /// Averaged time to empty, in minutes.
+    pub average_time_to_empty: Minutes,
+
+    /// Averaged time to full, in minutes.
+    pub average_time_to_full: Minutes,
+}
+
+impl Default for DynamicBatteryMsgs {
+    fn default() -> Self {
+        Self {
+            // Capacity/rate quantities default to the mA variant (matching the
+            // SBS default capacity mode); they have no `Default` of their own.
+            full_charge_capacity: CapacityModeValue::MilliAmpUnsigned(0),
+            remaining_capacity: CapacityModeValue::MilliAmpUnsigned(0),
+            at_rate: CapacityModeSignedValue::MilliAmpSigned(0),
+            max_power: Default::default(),
+            sus_power: Default::default(),
+            turbo_vload: Default::default(),
+            turbo_rhf_effective: Default::default(),
+            relative_soc: Default::default(),
+            cycle_count: Default::default(),
+            voltage: Default::default(),
+            max_error: Default::default(),
+            battery_status: Default::default(),
+            charging_voltage: Default::default(),
+            charging_current: Default::default(),
+            battery_temp: Default::default(),
+            current: Default::default(),
+            average_current: Default::default(),
+            bmd_status: Default::default(),
+            absolute_soc: Default::default(),
+            at_rate_ok: Default::default(),
+            at_rate_time_to_full: Default::default(),
+            at_rate_time_to_empty: Default::default(),
+            run_time_to_empty: Default::default(),
+            average_time_to_empty: Default::default(),
+            average_time_to_full: Default::default(),
+        }
+    }
+}
+
+/// Access to the standard [`StaticBatteryMsgs`] within a static battery data type.
+///
+/// The battery service answers standard ACPI queries from the fields in
+/// [`StaticBatteryMsgs`]. A [`FuelGauge`] may cache [`StaticBatteryMsgs`] directly
+/// (the default) or a custom OEM type that embeds it and adds extra fields. In the
+/// latter case the custom type implements this trait so the service can still read
+/// the standard fields, while OEM code reads the extended data from the concrete
+/// type via [`State::static_cache`].
+pub trait StaticBatteryData {
+    /// Returns a reference to the standard static battery data.
+    fn standard(&self) -> &StaticBatteryMsgs;
+}
+
+impl StaticBatteryData for StaticBatteryMsgs {
+    fn standard(&self) -> &StaticBatteryMsgs {
+        self
+    }
+}
+
+/// Access to the standard [`DynamicBatteryMsgs`] within a dynamic battery data type.
+///
+/// The battery service answers standard ACPI queries from the fields in
+/// [`DynamicBatteryMsgs`]. A [`FuelGauge`] may cache [`DynamicBatteryMsgs`] directly
+/// (the default) or a custom OEM type that embeds it and adds extra fields. In the
+/// latter case the custom type implements this trait so the service can still read
+/// the standard fields, while OEM code reads the extended data from the concrete
+/// type via [`State::dynamic_cache`].
+pub trait DynamicBatteryData {
+    /// Returns a reference to the standard dynamic battery data.
+    fn standard(&self) -> &DynamicBatteryMsgs;
+}
+
+impl DynamicBatteryData for DynamicBatteryMsgs {
+    fn standard(&self) -> &DynamicBatteryMsgs {
+        self
+    }
 }
 
 /// Operational state substates.
@@ -196,27 +384,42 @@ pub enum InternalState {
 /// This holds both the fuel gauge state machine state and the cached static and
 /// dynamic battery data. The battery service reads this state (via
 /// [`FuelGauge::state`]) when answering ACPI queries.
+///
+/// The cached data types are generic and default to the standard
+/// [`StaticBatteryMsgs`] / [`DynamicBatteryMsgs`]. OEMs may substitute custom
+/// types that embed the standard data and implement [`StaticBatteryData`] /
+/// [`DynamicBatteryData`] to expose it to the service.
 #[derive(Default)]
-pub struct State {
+pub struct State<S: StaticBatteryData = StaticBatteryMsgs, D: DynamicBatteryData = DynamicBatteryMsgs> {
     state: InternalState,
-    static_cache: StaticBatteryMsgs,
-    dynamic_cache: DynamicBatteryMsgs,
+    static_cache: S,
+    dynamic_cache: D,
 }
 
-impl State {
+impl<S: StaticBatteryData, D: DynamicBatteryData> State<S, D> {
     /// The current internal state.
     pub fn internal_state(&self) -> InternalState {
         self.state
     }
 
     /// A reference to the cached static battery data.
-    pub fn static_cache(&self) -> &StaticBatteryMsgs {
+    pub fn static_cache(&self) -> &S {
         &self.static_cache
     }
 
+    /// A mutable reference to the cached static battery data.
+    pub fn static_cache_mut(&mut self) -> &mut S {
+        &mut self.static_cache
+    }
+
     /// A reference to the cached dynamic battery data.
-    pub fn dynamic_cache(&self) -> &DynamicBatteryMsgs {
+    pub fn dynamic_cache(&self) -> &D {
         &self.dynamic_cache
+    }
+
+    /// A mutable reference to the cached dynamic battery data.
+    pub fn dynamic_cache_mut(&mut self) -> &mut D {
+        &mut self.dynamic_cache
     }
 
     /// Returns `true` if the fuel gauge is present.
@@ -245,24 +448,29 @@ impl State {
         self.state = InternalState::Present(PresentSubstate::Operational(OperationalSubstate::Init));
     }
 
-    /// Cache freshly read static battery data.
+    /// Update the cached static battery data in place.
     ///
-    /// If the fuel gauge is operational this also advances the state to
-    /// `Present(Operational(Polling))`. Should be called by the driver after a
-    /// successful static-data read.
-    pub fn on_static_data(&mut self, data: StaticBatteryMsgs) {
-        self.static_cache = data;
+    /// The `update` closure is given a mutable reference to the cached data and
+    /// writes the freshly read values directly into it, so a (potentially large)
+    /// `S` is never moved or copied through this call. If the fuel gauge is
+    /// operational this also advances the state to `Present(Operational(Polling))`.
+    /// Should be called by the driver after a successful static-data read.
+    pub fn on_static_data(&mut self, update: impl FnOnce(&mut S)) {
+        update(&mut self.static_cache);
         if self.is_operational() {
             self.state = InternalState::Present(PresentSubstate::Operational(OperationalSubstate::Polling));
         }
     }
 
-    /// Cache freshly read dynamic battery data.
+    /// Update the cached dynamic battery data in place.
     ///
-    /// Should be called by the driver after a successful dynamic-data read while
-    /// in the `Present(Operational(Polling))` state.
-    pub fn on_dynamic_data(&mut self, data: DynamicBatteryMsgs) {
-        self.dynamic_cache = data;
+    /// The `update` closure is given a mutable reference to the cached data and
+    /// writes the freshly read values directly into it, so a (potentially large)
+    /// `D` is never moved or copied through this call. Should be called by the
+    /// driver after a successful dynamic-data read while in the
+    /// `Present(Operational(Polling))` state.
+    pub fn on_dynamic_data(&mut self, update: impl FnOnce(&mut D)) {
+        update(&mut self.dynamic_cache);
     }
 
     /// Handle a communication timeout.
@@ -296,6 +504,18 @@ pub trait FuelGauge: embedded_batteries_async::smart_battery::SmartBattery {
     /// Type of error returned by the fuel gauge hardware.
     type FuelGaugeError: Into<FuelGaugeError> + embedded_batteries_async::smart_battery::Error;
 
+    /// The cached static battery data type.
+    ///
+    /// Use [`StaticBatteryMsgs`] (the standard data) directly, or a custom OEM
+    /// type that embeds it and implements [`StaticBatteryData`] to add extra fields.
+    type StaticData: StaticBatteryData;
+
+    /// The cached dynamic battery data type.
+    ///
+    /// Use [`DynamicBatteryMsgs`] (the standard data) directly, or a custom OEM
+    /// type that embeds it and implements [`DynamicBatteryData`] to add extra fields.
+    type DynamicData: DynamicBatteryData;
+
     /// Initialize the fuel gauge hardware.
     ///
     /// The driver should call [`State::on_initialized`] after a successful
@@ -319,8 +539,8 @@ pub trait FuelGauge: embedded_batteries_async::smart_battery::SmartBattery {
     fn update_dynamic_data(&mut self) -> impl Future<Output = Result<(), Self::FuelGaugeError>>;
 
     /// Return an immutable reference to the current fuel gauge state.
-    fn state(&self) -> &State;
+    fn state(&self) -> &State<Self::StaticData, Self::DynamicData>;
 
     /// Return a mutable reference to the current fuel gauge state.
-    fn state_mut(&mut self) -> &mut State;
+    fn state_mut(&mut self) -> &mut State<Self::StaticData, Self::DynamicData>;
 }
