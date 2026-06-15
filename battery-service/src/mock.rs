@@ -305,7 +305,10 @@ impl FuelGauge for MockFuelGauge {
         };
         let design_voltage = self.design_voltage().await?;
         let battery_mode = self.battery_mode().await?;
-        let measurement_accuracy: u32 = self.max_error().await?.into();
+        // ACPI BIX measurement accuracy is in thousandths of a percent; derive it
+        // from the Smart Battery MaxError (in %): accuracy = (100 - max_error)%.
+        // Saturate so an out-of-range MaxError (> 100%) can't underflow.
+        let measurement_accuracy: u32 = 100u32.saturating_sub(u32::from(self.max_error().await?)) * 1_000;
         let manufacture_date = self.manufacture_date().await?;
         let specification_info: u16 = self.specification_info().await?.into();
         let remaining_capacity_alarm = self.remaining_capacity_alarm().await?;
