@@ -18,8 +18,8 @@ pub use registration::{ArrayRegistration, Registration};
 // Re-export the fuel gauge interface so that OEM drivers and integrators can
 // implement and use the battery service without depending on the interface crate directly.
 pub use battery_service_interface::fuel_gauge::{
-    DynamicBatteryMsgs, FuelGauge, FuelGaugeError, InternalState, OperationalSubstate, PresentSubstate, State,
-    StaticBatteryMsgs,
+    DynamicBatteryData, DynamicBatteryMsgs, FuelGauge, FuelGaugeError, InternalState, OperationalSubstate,
+    PresentSubstate, State, StaticBatteryData, StaticBatteryMsgs,
 };
 pub use battery_service_interface::{BatteryService, DeviceId};
 
