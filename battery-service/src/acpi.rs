@@ -72,7 +72,7 @@ pub(crate) fn compute_bix<S: StaticBatteryData, D: DynamicBatteryData>(
         design_cap_of_warning: capacity_raw(static_cache.design_cap_warning),
         design_cap_of_low: capacity_raw(static_cache.design_cap_low),
         cycle_count: dynamic_cache.cycle_count.into(),
-        measurement_accuracy: u32::from(100 - dynamic_cache.max_error) * 1000u32,
+        measurement_accuracy: static_cache.measurement_accuracy,
         max_sampling_time: static_cache.max_sample_time,
         min_sampling_time: static_cache.min_sample_time,
         max_averaging_interval: static_cache.max_averaging_interval,
