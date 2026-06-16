@@ -56,10 +56,6 @@ path = "src/lib/lib.rs"
 name = "debug"
 path = "src/bin/debug.rs"
 
-[[bin]]
-name = "type-c-basic"
-path = "src/bin/type_c/basic.rs"
-
 # Needed otherwise cargo will pull from git
 [patch."https://github.com/OpenDevicePartnership/embedded-services"]
 embedded-services = { path = "../../embedded-service" }
