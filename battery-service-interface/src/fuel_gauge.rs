@@ -88,16 +88,16 @@ pub struct StaticBatteryMsgs {
     pub measurement_accuracy: u32,
 
     /// Maximum supported sampling time, in milliseconds.
-    pub max_sample_time: u32,
+    pub max_sample_time_ms: u32,
 
     /// Minimum supported sampling time, in milliseconds.
-    pub min_sample_time: u32,
+    pub min_sample_time_ms: u32,
 
     /// Maximum supported averaging interval, in milliseconds.
-    pub max_averaging_interval: u32,
+    pub max_averaging_interval_ms: u32,
 
     /// Minimum supported averaging interval, in milliseconds.
-    pub min_averaging_interval: u32,
+    pub min_averaging_interval_ms: u32,
 
     /// Capacity measurement granularity between the low and warning thresholds.
     ///
@@ -113,10 +113,10 @@ pub struct StaticBatteryMsgs {
     pub power_threshold_support: PowerThresholdSupport,
 
     /// Maximum supported threshold for instantaneous peak power, in mW.
-    pub max_instant_pwr_threshold: u32,
+    pub max_instant_pwr_threshold_mw: u32,
 
     /// Maximum supported threshold for sustainable peak power, in mW.
-    pub max_sus_pwr_threshold: u32,
+    pub max_sus_pwr_threshold_mw: u32,
 
     /// Battery maintenance control flags configuring calibration and charger behavior (ACPI `_BMC`).
     pub bmc_flags: BmcControlFlags,
@@ -134,13 +134,13 @@ pub struct StaticBatteryMsgs {
     ///
     /// `0` indicates standby is not supported and `0xFFFF_FFFF` indicates the
     /// time is unknown.
-    pub bmd_quick_recalibrate_time: u32,
+    pub bmd_quick_recalibrate_time_s: u32,
 
     /// Estimated time, in seconds, to recalibrate without standby.
     ///
     /// `0` indicates calibration may not succeed and `0xFFFF_FFFF` indicates the
     /// time is unknown.
-    pub bmd_slow_recalibrate_time: u32,
+    pub bmd_slow_recalibrate_time_s: u32,
 
     /// Manufacture Date. Fixed manufacturing datum, so cached as static data.
     pub manufacture_date: ManufactureDate,
@@ -174,18 +174,18 @@ impl Default for StaticBatteryMsgs {
             serial_num: Default::default(),
             battery_mode: Default::default(),
             measurement_accuracy: Default::default(),
-            max_sample_time: Default::default(),
-            min_sample_time: Default::default(),
-            max_averaging_interval: Default::default(),
-            min_averaging_interval: Default::default(),
+            max_sample_time_ms: Default::default(),
+            min_sample_time_ms: Default::default(),
+            max_averaging_interval_ms: Default::default(),
+            min_averaging_interval_ms: Default::default(),
             power_threshold_support: Default::default(),
-            max_instant_pwr_threshold: Default::default(),
-            max_sus_pwr_threshold: Default::default(),
+            max_instant_pwr_threshold_mw: Default::default(),
+            max_sus_pwr_threshold_mw: Default::default(),
             bmc_flags: Default::default(),
             bmd_capability: Default::default(),
             bmd_recalibrate_count: Default::default(),
-            bmd_quick_recalibrate_time: Default::default(),
-            bmd_slow_recalibrate_time: Default::default(),
+            bmd_quick_recalibrate_time_s: Default::default(),
+            bmd_slow_recalibrate_time_s: Default::default(),
             manufacture_date: Default::default(),
             specification_info: Default::default(),
             remaining_time_alarm: Default::default(),
@@ -198,16 +198,16 @@ impl Default for StaticBatteryMsgs {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct DynamicBatteryMsgs {
     /// Battery Max Power in mW.
-    pub max_power: u32,
+    pub max_power_mw: u32,
 
     /// Battery Sustained Power in mW.
-    pub sus_power: u32,
+    pub sus_power_mw: u32,
 
     /// Turbo Load Voltage in mV.
-    pub turbo_vload: u32,
+    pub turbo_vload: MilliVolts,
 
     /// Turbo RHF Effective in mOhm.
-    pub turbo_rhf_effective: u32,
+    pub turbo_rhf_effective_mohm: u32,
 
     /// Full Charge Capacity. Units (mA/mAh or centiWatt) are encoded by the [`CapacityModeValue`] variant.
     pub full_charge_capacity: CapacityModeValue,
@@ -284,10 +284,10 @@ impl Default for DynamicBatteryMsgs {
             full_charge_capacity: CapacityModeValue::MilliAmpUnsigned(0),
             remaining_capacity: CapacityModeValue::MilliAmpUnsigned(0),
             at_rate: CapacityModeSignedValue::MilliAmpSigned(0),
-            max_power: Default::default(),
-            sus_power: Default::default(),
+            max_power_mw: Default::default(),
+            sus_power_mw: Default::default(),
             turbo_vload: Default::default(),
-            turbo_rhf_effective: Default::default(),
+            turbo_rhf_effective_mohm: Default::default(),
             relative_soc: Default::default(),
             cycle_count: Default::default(),
             voltage: Default::default(),
