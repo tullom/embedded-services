@@ -6,6 +6,7 @@ use battery_service_interface::{
 };
 use core::marker::PhantomData;
 use embedded_services::info;
+use embedded_services::sync::Lockable;
 
 mod acpi;
 #[cfg(feature = "mock")]
@@ -29,7 +30,7 @@ pub use battery_service_interface::{BatteryService, DeviceId};
 /// registered fuel gauge's cached state. The OEM drives each registered fuel
 /// gauge directly through the [`FuelGauge`] trait methods.
 pub struct Service<'hw, Reg: Registration<'hw>> {
-    pub registration: Reg,
+    registration: Reg,
     _phantom: PhantomData<&'hw ()>,
 }
 
@@ -42,6 +43,16 @@ impl<'hw, Reg: Registration<'hw>> Service<'hw, Reg> {
             _phantom: PhantomData,
         }
     }
+
+    /// Returns the registered fuel gauges.
+    pub fn fuel_gauges(&self) -> &[&'hw Reg::FuelGauge] {
+        self.registration.fuel_gauges()
+    }
+
+    /// Look up a registered fuel gauge by its device ID.
+    pub fn get_fuel_gauge(&self, id: DeviceId) -> Option<&'hw Reg::FuelGauge> {
+        self.registration.get_fuel_gauge(id)
+    }
 }
 
 impl<'hw, Reg: Registration<'hw>> battery_service_interface::BatteryService for Service<'hw, Reg> {
@@ -50,11 +61,11 @@ impl<'hw, Reg: Registration<'hw>> battery_service_interface::BatteryService for 
         battery_id: DeviceId,
         charge_level: Bct,
     ) -> Result<BctReturnResult, BatteryError> {
-        self.bct_handler(battery_id, charge_level).await
+        self.battery_charge_time(&mut *self.fuel_gauge(battery_id)?.lock().await, charge_level)
     }
 
     async fn battery_info(&self, battery_id: DeviceId) -> Result<BixFixedStrings, BatteryError> {
-        self.bix_handler(battery_id).await
+        self.battery_info(&mut *self.fuel_gauge(battery_id)?.lock().await)
     }
 
     async fn set_battery_measurement_averaging_interval(
@@ -62,15 +73,15 @@ impl<'hw, Reg: Registration<'hw>> battery_service_interface::BatteryService for 
         battery_id: DeviceId,
         bma: Bma,
     ) -> Result<(), BatteryError> {
-        self.bma_handler(battery_id, bma).await
+        self.set_battery_measurement_averaging_interval(&mut *self.fuel_gauge(battery_id)?.lock().await, bma)
     }
 
     async fn battery_maintenance_control(&self, battery_id: DeviceId, bmc: Bmc) -> Result<(), BatteryError> {
-        self.bmc_handler(battery_id, bmc).await
+        self.battery_maintenance_control(&mut *self.fuel_gauge(battery_id)?.lock().await, bmc)
     }
 
     async fn battery_maintenance_data(&self, battery_id: DeviceId) -> Result<Bmd, BatteryError> {
-        self.bmd_handler(battery_id).await
+        self.battery_maintenance_data(&mut *self.fuel_gauge(battery_id)?.lock().await)
     }
 
     async fn set_battery_measurement_sampling_time(
@@ -78,15 +89,18 @@ impl<'hw, Reg: Registration<'hw>> battery_service_interface::BatteryService for 
         battery_id: DeviceId,
         battery_measurement_sampling: Bms,
     ) -> Result<(), BatteryError> {
-        self.bms_handler(battery_id, battery_measurement_sampling).await
+        self.set_battery_measurement_sampling_time(
+            &mut *self.fuel_gauge(battery_id)?.lock().await,
+            battery_measurement_sampling,
+        )
     }
 
     async fn battery_power_characteristics(&self, battery_id: DeviceId) -> Result<Bpc, BatteryError> {
-        self.bpc_handler(battery_id).await
+        self.battery_power_characteristics(&mut *self.fuel_gauge(battery_id)?.lock().await)
     }
 
     async fn battery_power_state(&self, battery_id: DeviceId) -> Result<Bps, BatteryError> {
-        self.bps_handler(battery_id).await
+        self.battery_power_state(&mut *self.fuel_gauge(battery_id)?.lock().await)
     }
 
     async fn set_battery_power_threshold(
@@ -94,11 +108,11 @@ impl<'hw, Reg: Registration<'hw>> battery_service_interface::BatteryService for 
         battery_id: DeviceId,
         power_threshold: Bpt,
     ) -> Result<(), BatteryError> {
-        self.bpt_handler(battery_id, power_threshold).await
+        self.set_battery_power_threshold(&mut *self.fuel_gauge(battery_id)?.lock().await, power_threshold)
     }
 
     async fn battery_status(&self, battery_id: DeviceId) -> Result<BstReturn, BatteryError> {
-        self.bst_handler(battery_id).await
+        self.battery_status(&mut *self.fuel_gauge(battery_id)?.lock().await)
     }
 
     async fn battery_time_to_empty(
@@ -106,22 +120,22 @@ impl<'hw, Reg: Registration<'hw>> battery_service_interface::BatteryService for 
         battery_id: DeviceId,
         battery_discharge_rate: Btm,
     ) -> Result<BtmReturnResult, BatteryError> {
-        self.btm_handler(battery_id, battery_discharge_rate).await
+        self.battery_time_to_empty(&mut *self.fuel_gauge(battery_id)?.lock().await, battery_discharge_rate)
     }
 
     async fn set_battery_trip_point(&self, battery_id: DeviceId, btp: Btp) -> Result<(), BatteryError> {
-        self.btp_handler(battery_id, btp).await
+        self.set_battery_trip_point(&mut *self.fuel_gauge(battery_id)?.lock().await, btp)
     }
 
-    async fn is_psu_in_use(&self, battery_id: DeviceId) -> Result<PsrReturn, BatteryError> {
-        self.psr_handler(battery_id).await
+    async fn is_psu_in_use(&self, psu_id: DeviceId) -> Result<PsrReturn, BatteryError> {
+        self.is_psu_in_use(&mut *self.fuel_gauge(psu_id)?.lock().await)
     }
 
     async fn power_source_information(&self, power_source_id: DeviceId) -> Result<PifFixedStrings, BatteryError> {
-        self.pif_handler(power_source_id).await
+        self.power_source_information(&mut *self.fuel_gauge(power_source_id)?.lock().await)
     }
 
     async fn device_status(&self, battery_id: DeviceId) -> Result<StaReturn, BatteryError> {
-        self.sta_handler(battery_id).await
+        self.device_status(&mut *self.fuel_gauge(battery_id)?.lock().await)
     }
 }

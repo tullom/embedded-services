@@ -31,18 +31,29 @@ impl From<core::convert::Infallible> for FuelGaugeError {
     }
 }
 
+/// Size (in bytes) of the cached manufacturer name string in [`StaticBatteryMsgs`], including the null terminator.
+pub const MANUFACTURER_NAME_SIZE: usize = 21;
+/// Size (in bytes) of the cached device name string in [`StaticBatteryMsgs`], including the null terminator.
+pub const DEVICE_NAME_SIZE: usize = 21;
+/// Size (in bytes) of the cached device chemistry string in [`StaticBatteryMsgs`], including the null terminator.
+pub const DEVICE_CHEMISTRY_SIZE: usize = 5;
+/// Size (in bytes) of the cached device chemistry ID in [`StaticBatteryMsgs`].
+pub const DEVICE_CHEMISTRY_ID_SIZE: usize = 2;
+/// Size (in bytes) of the cached battery serial number in [`StaticBatteryMsgs`].
+pub const SERIAL_NUM_SIZE: usize = 4;
+
 /// Standard static battery data cache.
 #[derive(Default, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct StaticBatteryMsgs {
     /// Manufacturer Name.
-    pub manufacturer_name: [u8; 21],
+    pub manufacturer_name: [u8; MANUFACTURER_NAME_SIZE],
 
     /// Device Name.
-    pub device_name: [u8; 21],
+    pub device_name: [u8; DEVICE_NAME_SIZE],
 
     /// Device Chemistry.
-    pub device_chemistry: [u8; 5],
+    pub device_chemistry: [u8; DEVICE_CHEMISTRY_SIZE],
 
     /// Design Capacity in mWh.
     pub design_capacity_mwh: u32,
@@ -51,10 +62,10 @@ pub struct StaticBatteryMsgs {
     pub design_voltage_mv: u16,
 
     /// Device Chemistry Id.
-    pub device_chemistry_id: [u8; 2],
+    pub device_chemistry_id: [u8; DEVICE_CHEMISTRY_ID_SIZE],
 
     /// Device Serial Number.
-    pub serial_num: [u8; 4],
+    pub serial_num: [u8; SERIAL_NUM_SIZE],
 
     /// Battery Mode.
     pub battery_mode: BatteryModeFields,

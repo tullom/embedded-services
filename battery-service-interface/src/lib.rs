@@ -179,7 +179,7 @@ pub trait BatteryService {
     /// Queries whether the power supply unit is currently in use (i.e., providing power to the system). Corresponds to ACPI's _PSR method.
     fn is_psu_in_use(
         &self,
-        battery_id: DeviceId,
+        power_source_id: DeviceId,
     ) -> impl core::future::Future<Output = Result<PsrReturn, BatteryError>>;
 
     /// Queries information about the battery's power source. Corresponds to ACPI's _PIF method.

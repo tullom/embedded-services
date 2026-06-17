@@ -1,4 +1,7 @@
-use battery_service_interface::fuel_gauge::{DynamicBatteryMsgs, FuelGauge, FuelGaugeError, State, StaticBatteryMsgs};
+use battery_service_interface::fuel_gauge::{
+    DEVICE_CHEMISTRY_ID_SIZE, DEVICE_CHEMISTRY_SIZE, DEVICE_NAME_SIZE, DynamicBatteryMsgs, FuelGauge, FuelGaugeError,
+    MANUFACTURER_NAME_SIZE, State, StaticBatteryMsgs,
+};
 use embassy_time::{Duration, Timer};
 use embedded_batteries_async::{
     acpi, charger,
@@ -145,6 +148,9 @@ impl FuelGauge for MockFuelGauge {
         Ok(())
     }
 
+    // No index/slice below can panic: `buf` is sized to the largest static string field,
+    // every `buf_len` is a field's own `.len()` (<= that size), and `serial` is a `[u8; 2]`
+    // from `u16::to_le_bytes()`.
     #[allow(clippy::indexing_slicing)]
     async fn update_static_data(&mut self) -> Result<(), Self::FuelGaugeError> {
         let design_capacity: u32 = match self.design_capacity().await? {
@@ -182,7 +188,16 @@ impl FuelGauge for MockFuelGauge {
             bmd_quick_recalibrate_time: Default::default(),
             bmd_slow_recalibrate_time: Default::default(),
         };
-        let mut buf = [0u8; 21];
+        // `BUF_SIZE` is the compile time maximum of the static string field lengths read below,
+        // so `buf` is always large enough for each.
+        const fn max_usize(a: usize, b: usize) -> usize {
+            if a > b { a } else { b }
+        }
+        const BUF_SIZE: usize = max_usize(
+            max_usize(MANUFACTURER_NAME_SIZE, DEVICE_NAME_SIZE),
+            max_usize(DEVICE_CHEMISTRY_SIZE, DEVICE_CHEMISTRY_ID_SIZE),
+        );
+        let mut buf = [0u8; BUF_SIZE];
 
         let buf_len = new_msgs.manufacturer_name.len();
         self.manufacturer_name(&mut buf[..buf_len]).await?;

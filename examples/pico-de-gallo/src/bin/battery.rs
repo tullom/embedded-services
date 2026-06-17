@@ -202,7 +202,7 @@ async fn recover_state_machine(fuel_gauge: &FuelGauge) -> Result<(), ()> {
 
 async fn run_app<'hw>(battery_service: bs::Service<'hw, Reg<'hw>>) {
     // Initialize the fuel gauge by driving it directly.
-    let fuel_gauge = battery_service.registration.fuel_gauges[0];
+    let fuel_gauge = battery_service.fuel_gauges()[0];
     let mut retries = 5;
     while let Err(e) = init_state_machine(fuel_gauge).await {
         retries -= 1;
