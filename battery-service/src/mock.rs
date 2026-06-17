@@ -99,7 +99,7 @@ impl MockFuelGauge {
     /// cutoff per cell); the 3000 mAh cell capacity and discharge currents are the
     /// same across topologies, so the reported power quantities scale with the pack
     /// voltage. Capacity and rate are reported in current units (mA/mAh).
-    fn with_series_cells(cells: u16, device_name: [u8; 21]) -> Self {
+    fn with_series_cells(cells: u16, device_name: [u8; DEVICE_NAME_SIZE]) -> Self {
         // Per-cell Li-ion voltages.
         const NOMINAL_MV_PER_CELL: u16 = 3_700;
         const FULL_MV_PER_CELL: u16 = 4_200;
@@ -110,11 +110,45 @@ impl MockFuelGauge {
         const SUS_DISCHARGE_MA: u32 = 2_700;
         const INSTANT_THRESHOLD_MA: u32 = 5_400;
         const SUS_THRESHOLD_MA: u32 = 3_150;
+        // Design charge capacity (mAh) and the capacity thresholds / granularity derived from it.
+        const DESIGN_CAPACITY_MAH: u16 = 3_000;
+        const DESIGN_CAP_WARNING_MAH: u16 = 300; // 10% of design
+        const DESIGN_CAP_LOW_MAH: u16 = 150; // 5% of design
+        const CAP_GRANULARITY_MAH: u16 = 10; // reporting granularity
+        const REMAINING_CAP_ALARM_MAH: u16 = 300; // 10% of design
+        const FULL_CHARGE_CAPACITY_MAH: u16 = 2_880; // ~96% of design after wear
+        const REMAINING_CAPACITY_MAH: u16 = 2_304; // 80% of full charge
+        // Measurement accuracy (thousandths of a percent) and sampling characteristics (ms).
+        const MEASUREMENT_ACCURACY: u32 = 99_000; // 99.000%, consistent with 1% max error
+        const MAX_SAMPLE_TIME_MS: u32 = 1_000;
+        const MIN_SAMPLE_TIME_MS: u32 = 31;
+        const MAX_AVERAGING_INTERVAL_MS: u32 = 4_250;
+        const MIN_AVERAGING_INTERVAL_MS: u32 = 25;
+        // Battery-maintenance (recalibration) characteristics.
+        const BMD_RECALIBRATE_COUNT: u32 = 2;
+        const BMD_QUICK_RECALIBRATE_TIME_S: u32 = 120;
+        const BMD_SLOW_RECALIBRATE_TIME_S: u32 = 600;
+        // Dynamic operating point: ~80% SoC discharging under a moderate load.
+        const TURBO_RHF_EFFECTIVE_MOHM: u32 = 150; // pack effective resistance
+        const RELATIVE_SOC_PCT: smart_battery::Percent = 80;
+        const ABSOLUTE_SOC_PCT: smart_battery::Percent = 77; // REMAINING_CAPACITY_MAH / DESIGN_CAPACITY_MAH
+        const CYCLE_COUNT: smart_battery::Cycles = 150;
+        const MAX_ERROR_PCT: smart_battery::Percent = 1;
+        const CHARGING_CURRENT_MA: charger::MilliAmps = 1_500; // desired 0.5C charge current
+        const BATTERY_TEMP_DK: smart_battery::DeciKelvin = 3_031; // 30.0 degC
+        const DISCHARGE_CURRENT_MA: smart_battery::MilliAmpsSigned = -1_500;
+        const AVERAGE_DISCHARGE_CURRENT_MA: smart_battery::MilliAmpsSigned = -1_450;
+        const AT_RATE_MA: i16 = -1_500;
+        // Runtime predictions, in minutes, at the emulated discharge rate.
+        const AT_RATE_TIME_TO_EMPTY_MIN: smart_battery::Minutes = 86;
+        const RUN_TIME_TO_EMPTY_MIN: smart_battery::Minutes = 86;
+        const AVERAGE_TIME_TO_EMPTY_MIN: smart_battery::Minutes = 88;
+        const REMAINING_TIME_ALARM_MIN: smart_battery::Minutes = 10;
 
         let design_voltage = cells * NOMINAL_MV_PER_CELL;
         let full_charge_voltage = cells * FULL_MV_PER_CELL;
         let terminal_voltage = cells * SOC80_MV_PER_CELL; // ~80% SoC
-        let cutoff_voltage = u32::from(cells) * u32::from(CUTOFF_MV_PER_CELL);
+        let cutoff_voltage = cells * CUTOFF_MV_PER_CELL;
         // Power (mW) at the pack's nominal voltage for a given current draw.
         let power_mw = |current_ma: u32| current_ma * u32::from(design_voltage) / 1_000;
 
@@ -123,32 +157,32 @@ impl MockFuelGauge {
         s.manufacturer_name = padded(b"ODP Batteries");
         s.device_name = device_name;
         s.device_chemistry = padded(b"LION");
-        s.design_capacity = smart_battery::CapacityModeValue::MilliAmpUnsigned(3_000); // 3000 mAh design charge
+        s.design_capacity = smart_battery::CapacityModeValue::MilliAmpUnsigned(DESIGN_CAPACITY_MAH);
         s.design_voltage = design_voltage;
         s.device_chemistry_id = *b"LI";
         s.serial_num = [0x34, 0x12, 0x00, 0x00]; // serial 0x1234
         // Report capacity/rate in current units (mA/mAh) to match the fields here;
         // alarm and charger-broadcast modes left enabled (the SBS defaults).
         s.battery_mode = smart_battery::BatteryModeFields::new().with_capacity_mode(false);
-        s.design_cap_warning = smart_battery::CapacityModeValue::MilliAmpUnsigned(300); // 10% of design (300 mAh)
-        s.design_cap_low = smart_battery::CapacityModeValue::MilliAmpUnsigned(150); // 5% of design (150 mAh)
-        s.measurement_accuracy = 99_000; // 99.000%, consistent with 1% max error
-        s.max_sample_time = 1_000;
-        s.min_sample_time = 31;
-        s.max_averaging_interval = 4_250;
-        s.min_averaging_interval = 25;
-        s.cap_granularity_1 = smart_battery::CapacityModeValue::MilliAmpUnsigned(10); // 10 mAh reporting granularity
-        s.cap_granularity_2 = smart_battery::CapacityModeValue::MilliAmpUnsigned(10);
+        s.design_cap_warning = smart_battery::CapacityModeValue::MilliAmpUnsigned(DESIGN_CAP_WARNING_MAH);
+        s.design_cap_low = smart_battery::CapacityModeValue::MilliAmpUnsigned(DESIGN_CAP_LOW_MAH);
+        s.measurement_accuracy = MEASUREMENT_ACCURACY;
+        s.max_sample_time_ms = MAX_SAMPLE_TIME_MS;
+        s.min_sample_time_ms = MIN_SAMPLE_TIME_MS;
+        s.max_averaging_interval_ms = MAX_AVERAGING_INTERVAL_MS;
+        s.min_averaging_interval_ms = MIN_AVERAGING_INTERVAL_MS;
+        s.cap_granularity_1 = smart_battery::CapacityModeValue::MilliAmpUnsigned(CAP_GRANULARITY_MAH);
+        s.cap_granularity_2 = smart_battery::CapacityModeValue::MilliAmpUnsigned(CAP_GRANULARITY_MAH);
         s.power_threshold_support =
             acpi::PowerThresholdSupport::INSTANTANEOUS | acpi::PowerThresholdSupport::SUSTAINABLE;
-        s.max_instant_pwr_threshold = power_mw(INSTANT_THRESHOLD_MA);
-        s.max_sus_pwr_threshold = power_mw(SUS_THRESHOLD_MA);
+        s.max_instant_pwr_threshold_mw = power_mw(INSTANT_THRESHOLD_MA);
+        s.max_sus_pwr_threshold_mw = power_mw(SUS_THRESHOLD_MA);
         s.bmc_flags = acpi::BmcControlFlags::empty();
         s.bmd_capability =
             acpi::BmdCapabilityFlags::AML_CALIBRATION_SUPPORTED | acpi::BmdCapabilityFlags::CHARGER_DISABLE_SUPPORTED;
-        s.bmd_recalibrate_count = 2;
-        s.bmd_quick_recalibrate_time = 120;
-        s.bmd_slow_recalibrate_time = 600;
+        s.bmd_recalibrate_count = BMD_RECALIBRATE_COUNT;
+        s.bmd_quick_recalibrate_time_s = BMD_QUICK_RECALIBRATE_TIME_S;
+        s.bmd_slow_recalibrate_time_s = BMD_SLOW_RECALIBRATE_TIME_S;
         s.manufacture_date = smart_battery::ManufactureDate::new()
             .with_day(16)
             .with_month(10)
@@ -158,38 +192,38 @@ impl MockFuelGauge {
             .with_revision(smart_battery::Revision::Version1And1Dot1)
             .with_version(smart_battery::Version::Version1Dot1)
             .into();
-        s.remaining_capacity_alarm = smart_battery::CapacityModeValue::MilliAmpUnsigned(300); // 10% of design (300 mAh)
-        s.remaining_time_alarm = 10;
+        s.remaining_capacity_alarm = smart_battery::CapacityModeValue::MilliAmpUnsigned(REMAINING_CAP_ALARM_MAH);
+        s.remaining_time_alarm = REMAINING_TIME_ALARM_MIN;
 
         let d = state.dynamic_cache_mut();
-        d.max_power = power_mw(PEAK_DISCHARGE_MA);
-        d.sus_power = power_mw(SUS_DISCHARGE_MA);
+        d.max_power_mw = power_mw(PEAK_DISCHARGE_MA);
+        d.sus_power_mw = power_mw(SUS_DISCHARGE_MA);
         d.turbo_vload = cutoff_voltage;
-        d.turbo_rhf_effective = 150; // pack effective resistance
-        d.full_charge_capacity = smart_battery::CapacityModeValue::MilliAmpUnsigned(2_880); // ~96% of design after wear (mAh)
-        d.remaining_capacity = smart_battery::CapacityModeValue::MilliAmpUnsigned(2_304); // 80% of full charge (mAh)
-        d.relative_soc = 80;
-        d.cycle_count = 150;
+        d.turbo_rhf_effective_mohm = TURBO_RHF_EFFECTIVE_MOHM;
+        d.full_charge_capacity = smart_battery::CapacityModeValue::MilliAmpUnsigned(FULL_CHARGE_CAPACITY_MAH);
+        d.remaining_capacity = smart_battery::CapacityModeValue::MilliAmpUnsigned(REMAINING_CAPACITY_MAH);
+        d.relative_soc = RELATIVE_SOC_PCT;
+        d.cycle_count = CYCLE_COUNT;
         d.voltage = terminal_voltage;
-        d.max_error = 1;
+        d.max_error = MAX_ERROR_PCT;
         // Initialized and discharging; the discharging bit drives the ACPI BST state.
         d.battery_status = smart_battery::BatteryStatusFields::new()
             .with_initialized(true)
             .with_discharging(true)
             .into();
         d.charging_voltage = full_charge_voltage; // desired full-charge voltage
-        d.charging_current = 1_500; // desired 0.5C charge current
-        d.battery_temp = 3_031; // 30.0 degC
-        d.current = -1_500; // discharging
-        d.average_current = -1_450;
+        d.charging_current = CHARGING_CURRENT_MA;
+        d.battery_temp = BATTERY_TEMP_DK;
+        d.current = DISCHARGE_CURRENT_MA;
+        d.average_current = AVERAGE_DISCHARGE_CURRENT_MA;
         d.bmd_status = acpi::BmdStatusFlags::empty();
-        d.absolute_soc = 77; // 2_304 / 3_000
-        d.at_rate = smart_battery::CapacityModeSignedValue::MilliAmpSigned(-1_500);
+        d.absolute_soc = ABSOLUTE_SOC_PCT;
+        d.at_rate = smart_battery::CapacityModeSignedValue::MilliAmpSigned(AT_RATE_MA);
         d.at_rate_ok = true;
         d.at_rate_time_to_full = u16::MAX; // over-range: not charging at this rate
-        d.at_rate_time_to_empty = 86;
-        d.run_time_to_empty = 86;
-        d.average_time_to_empty = 88;
+        d.at_rate_time_to_empty = AT_RATE_TIME_TO_EMPTY_MIN;
+        d.run_time_to_empty = RUN_TIME_TO_EMPTY_MIN;
+        d.average_time_to_empty = AVERAGE_TIME_TO_EMPTY_MIN;
         d.average_time_to_full = u16::MAX; // over-range: not charging
         MockFuelGauge { state }
     }
@@ -270,9 +304,9 @@ impl FuelGauge for MockFuelGauge {
         self.state_mut().on_dynamic_data(|d| {
             d.average_current = average_current;
             d.battery_status = battery_status;
-            d.max_power = 100;
+            d.max_power_mw = 100;
             d.battery_temp = battery_temp;
-            d.sus_power = 42;
+            d.sus_power_mw = 42;
             d.charging_current = charging_current;
             d.charging_voltage = charging_voltage;
             d.voltage = voltage;
@@ -284,7 +318,7 @@ impl FuelGauge for MockFuelGauge {
             d.max_error = max_error;
             d.bmd_status = acpi::BmdStatusFlags::default();
             d.turbo_vload = 0;
-            d.turbo_rhf_effective = 0;
+            d.turbo_rhf_effective_mohm = 0;
             d.absolute_soc = absolute_soc;
             d.at_rate = at_rate;
             d.at_rate_ok = at_rate_ok;
@@ -314,15 +348,21 @@ impl FuelGauge for MockFuelGauge {
         let remaining_capacity_alarm = self.remaining_capacity_alarm().await?;
         let remaining_time_alarm = self.remaining_time_alarm().await?;
 
-        let mut manufacturer_name = [0u8; 21];
+        let mut manufacturer_name = [0u8; MANUFACTURER_NAME_SIZE];
         self.manufacturer_name(&mut manufacturer_name).await?;
-        let mut device_name = [0u8; 21];
+        let mut device_name = [0u8; DEVICE_NAME_SIZE];
         self.device_name(&mut device_name).await?;
-        let mut device_chemistry = [0u8; 5];
+        let mut device_chemistry = [0u8; DEVICE_CHEMISTRY_SIZE];
         self.device_chemistry(&mut device_chemistry).await?;
-        let mut device_chemistry_id = [0u8; 2];
+        let mut device_chemistry_id = [0u8; DEVICE_CHEMISTRY_ID_SIZE];
         self.device_chemistry(&mut device_chemistry_id).await?;
         let [serial_lsb, serial_msb] = self.serial_number().await?.to_le_bytes();
+
+        // Warning threshold at ~1/4 (25%) and low threshold at ~1/10 (10%) of design capacity.
+        const DESIGN_CAP_WARNING_DIVISOR: u32 = 4;
+        const DESIGN_CAP_LOW_DIVISOR: u32 = 10;
+        let design_cap_warning = (design_capacity_value / DESIGN_CAP_WARNING_DIVISOR) as u16;
+        let design_cap_low = (design_capacity_value / DESIGN_CAP_LOW_DIVISOR) as u16;
 
         self.state_mut().on_static_data(|s| {
             s.manufacturer_name = manufacturer_name;
@@ -333,24 +373,23 @@ impl FuelGauge for MockFuelGauge {
             s.device_chemistry_id = device_chemistry_id;
             s.serial_num = [serial_lsb, serial_msb, 0, 0];
             s.battery_mode = battery_mode;
-            s.design_cap_warning =
-                smart_battery::CapacityModeValue::MilliAmpUnsigned((design_capacity_value / 4) as u16);
-            s.design_cap_low = smart_battery::CapacityModeValue::MilliAmpUnsigned((design_capacity_value / 10) as u16);
+            s.design_cap_warning = smart_battery::CapacityModeValue::MilliAmpUnsigned(design_cap_warning);
+            s.design_cap_low = smart_battery::CapacityModeValue::MilliAmpUnsigned(design_cap_low);
             s.measurement_accuracy = measurement_accuracy;
-            s.max_sample_time = Default::default();
-            s.min_sample_time = Default::default();
-            s.max_averaging_interval = Default::default();
-            s.min_averaging_interval = Default::default();
+            s.max_sample_time_ms = Default::default();
+            s.min_sample_time_ms = Default::default();
+            s.max_averaging_interval_ms = Default::default();
+            s.min_averaging_interval_ms = Default::default();
             s.cap_granularity_1 = smart_battery::CapacityModeValue::MilliAmpUnsigned(0);
             s.cap_granularity_2 = smart_battery::CapacityModeValue::MilliAmpUnsigned(0);
             s.power_threshold_support = battery_service_interface::PowerThresholdSupport::empty();
-            s.max_instant_pwr_threshold = Default::default();
-            s.max_sus_pwr_threshold = Default::default();
+            s.max_instant_pwr_threshold_mw = Default::default();
+            s.max_sus_pwr_threshold_mw = Default::default();
             s.bmc_flags = battery_service_interface::BmcControlFlags::empty();
             s.bmd_capability = battery_service_interface::BmdCapabilityFlags::empty();
             s.bmd_recalibrate_count = Default::default();
-            s.bmd_quick_recalibrate_time = Default::default();
-            s.bmd_slow_recalibrate_time = Default::default();
+            s.bmd_quick_recalibrate_time_s = Default::default();
+            s.bmd_slow_recalibrate_time_s = Default::default();
             s.manufacture_date = manufacture_date;
             s.specification_info = specification_info;
             s.remaining_capacity_alarm = remaining_capacity_alarm;

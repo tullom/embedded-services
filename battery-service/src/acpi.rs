@@ -73,10 +73,10 @@ pub(crate) fn compute_bix<S: StaticBatteryData, D: DynamicBatteryData>(
         design_cap_of_low: capacity_raw(static_cache.design_cap_low),
         cycle_count: dynamic_cache.cycle_count.into(),
         measurement_accuracy: static_cache.measurement_accuracy,
-        max_sampling_time: static_cache.max_sample_time,
-        min_sampling_time: static_cache.min_sample_time,
-        max_averaging_interval: static_cache.max_averaging_interval,
-        min_averaging_interval: static_cache.min_averaging_interval,
+        max_sampling_time: static_cache.max_sample_time_ms,
+        min_sampling_time: static_cache.min_sample_time_ms,
+        max_averaging_interval: static_cache.max_averaging_interval_ms,
+        min_averaging_interval: static_cache.min_averaging_interval_ms,
         battery_capacity_granularity_1: capacity_raw(static_cache.cap_granularity_1),
         battery_capacity_granularity_2: capacity_raw(static_cache.cap_granularity_2),
         model_number: [0u8; STD_BIX_MODEL_SIZE],
@@ -121,9 +121,9 @@ pub(crate) fn compute_bps<D: DynamicBatteryData>(dynamic_cache: &D) -> embedded_
     // TODO: period values are correct for bq40z50, add to config to support other fuel gauges
     embedded_batteries_async::acpi::Bps {
         revision: 1,
-        instantaneous_peak_power_level: dynamic_cache.max_power,
+        instantaneous_peak_power_level: dynamic_cache.max_power_mw,
         instantaneous_peak_power_period: 10,
-        sustainable_peak_power_level: dynamic_cache.sus_power,
+        sustainable_peak_power_level: dynamic_cache.sus_power_mw,
         sustainable_peak_power_period: 10000,
     }
 }
@@ -133,8 +133,8 @@ pub(crate) fn compute_bpc<S: StaticBatteryData>(static_cache: &S) -> embedded_ba
     embedded_batteries_async::acpi::Bpc {
         revision: 1,
         power_threshold_support: static_cache.power_threshold_support,
-        max_instantaneous_peak_power_threshold: static_cache.max_instant_pwr_threshold,
-        max_sustainable_peak_power_threshold: static_cache.max_sus_pwr_threshold,
+        max_instantaneous_peak_power_threshold: static_cache.max_instant_pwr_threshold_mw,
+        max_sustainable_peak_power_threshold: static_cache.max_sus_pwr_threshold_mw,
     }
 }
 
@@ -148,8 +148,8 @@ pub(crate) fn compute_bmd<S: StaticBatteryData, D: DynamicBatteryData>(
         status_flags: dynamic_cache.bmd_status,
         capability_flags: static_cache.bmd_capability,
         recalibrate_count: static_cache.bmd_recalibrate_count,
-        quick_recalibrate_time: static_cache.bmd_quick_recalibrate_time,
-        slow_recalibrate_time: static_cache.bmd_slow_recalibrate_time,
+        quick_recalibrate_time: static_cache.bmd_quick_recalibrate_time_s,
+        slow_recalibrate_time: static_cache.bmd_slow_recalibrate_time_s,
     }
 }
 
@@ -479,7 +479,7 @@ mod tests {
         let bpc = compute_bpc(&oem_static);
         assert_eq!(
             bpc.max_instantaneous_peak_power_threshold,
-            oem_static.standard.max_instant_pwr_threshold
+            oem_static.standard.max_instant_pwr_threshold_mw
         );
         assert_eq!(oem_static.oem_part_number, 0xABCD);
     }

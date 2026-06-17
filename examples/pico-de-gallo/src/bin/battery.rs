@@ -133,9 +133,9 @@ impl bs::FuelGauge for Battery {
         self.state_mut().on_dynamic_data(|d| {
             d.average_current = average_current;
             d.battery_status = battery_status;
-            d.max_power = max_power;
+            d.max_power_mw = max_power;
             d.battery_temp = battery_temp;
-            d.sus_power = sus_power;
+            d.sus_power_mw = sus_power;
             d.charging_current = charging_current;
             d.charging_voltage = charging_voltage;
             d.voltage = voltage;
@@ -147,7 +147,7 @@ impl bs::FuelGauge for Battery {
             d.max_error = max_error;
             d.bmd_status = embedded_batteries_async::acpi::BmdStatusFlags::default();
             d.turbo_vload = 0;
-            d.turbo_rhf_effective = 0;
+            d.turbo_rhf_effective_mohm = 0;
         });
         Ok(())
     }
