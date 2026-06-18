@@ -8,7 +8,10 @@ use super::*;
 
 use power_policy_interface::psu;
 use power_policy_interface::service::event::Event as ServiceEvent;
-use power_policy_interface::{capability::ConsumerPowerCapability, psu::PsuState};
+use power_policy_interface::{
+    capability::{ConsumerDisconnect, ConsumerPowerCapability},
+    psu::PsuState,
+};
 
 /// State of the current consumer
 #[derive(Debug, PartialEq, Eq)]
@@ -216,7 +219,15 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
             // so just continue execution.
             self.disconnect_chargers().await?;
 
-            self.broadcast_event(ServiceEvent::ConsumerDisconnected(current_consumer.psu));
+            // Indicate why the current consumer is being disconnected. If we are reconnecting
+            // the same device, it is renegotiating a new power capability. Otherwise, the service
+            // is switching to a different PSU.
+            let flags = if ptr::eq(current_consumer.psu, new_consumer.psu) {
+                ConsumerDisconnect::none().with_renegotiation(true)
+            } else {
+                ConsumerDisconnect::none().with_switching(true)
+            };
+            self.broadcast_event(ServiceEvent::ConsumerDisconnected(current_consumer.psu, flags));
 
             // Don't update the unconstrained here because this is a transitional state
         }
@@ -262,7 +273,10 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
             // Notify disconnect if recently detached consumer was previously attached.
             if let Some(current_consumer) = self.state.current_consumer_state {
                 self.disconnect_chargers().await?;
-                self.broadcast_event(ServiceEvent::ConsumerDisconnected(current_consumer.psu));
+                self.broadcast_event(ServiceEvent::ConsumerDisconnected(
+                    current_consumer.psu,
+                    ConsumerDisconnect::none(),
+                ));
             }
             // No new consumer available
             self.state.current_consumer_state = None;

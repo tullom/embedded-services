@@ -10,6 +10,7 @@ use type_c_interface::control::{
     vdm::{AttnVdm, OtherVdm},
 };
 
+pub mod max_sink_voltage;
 pub mod pd;
 pub mod ucsi;
 
@@ -17,6 +18,7 @@ pub mod ucsi;
 pub enum FnCall {
     Pd(pd::FnCall),
     Ucsi(ucsi::FnCall),
+    MaxSinkVoltage(max_sink_voltage::FnCall),
 }
 
 /// Mock PD controller for use in tests
@@ -30,6 +32,8 @@ pub struct Mock {
     pub next_result_clear_dead_battery_flag: VecDeque<Result<(), PdError>>,
     /// Next results to return for [`type_c_interface::controller::pd::Pd::enable_sink_path`]
     pub next_result_enable_sink_path: VecDeque<Result<(), PdError>>,
+    /// Next results to return for [`type_c_interface::controller::max_sink_voltage::MaxSinkVoltage::set_max_sink_voltage`]
+    pub next_result_set_max_sink_voltage: VecDeque<Result<(), PdError>>,
     /// Next results to return for [`type_c_interface::controller::pd::Pd::get_pd_alert`]
     pub next_result_get_pd_alert: VecDeque<Result<Option<Ado>, PdError>>,
     /// Next results to return for [`type_c_interface::controller::pd::Pd::set_unconstrained_power`]
@@ -74,6 +78,7 @@ impl Mock {
             next_result_get_port_status: VecDeque::new(),
             next_result_clear_dead_battery_flag: VecDeque::new(),
             next_result_enable_sink_path: VecDeque::new(),
+            next_result_set_max_sink_voltage: VecDeque::new(),
             next_result_get_pd_alert: VecDeque::new(),
             next_result_set_unconstrained_power: VecDeque::new(),
             next_result_get_other_vdm: VecDeque::new(),

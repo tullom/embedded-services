@@ -54,6 +54,14 @@ impl<'a, S: NonBlockingSender<EventData>> Mock<'a, S> {
             .unwrap();
     }
 
+    /// Simulate an already-attached consumer renegotiating a new power capability.
+    pub async fn simulate_update_consumer_power_capability(&mut self, capability: Option<ConsumerPowerCapability>) {
+        self.state.update_consumer_power_capability(capability).unwrap();
+        self.sender
+            .try_send(EventData::UpdatedConsumerCapability(capability))
+            .unwrap();
+    }
+
     pub async fn simulate_detach(&mut self) {
         self.state.detach();
         self.sender.try_send(EventData::Detached).unwrap();
