@@ -6,7 +6,7 @@ use embassy_futures::join::join;
 use embassy_time::{TimeoutError, with_timeout};
 use embedded_usb_pd::{PowerRole, type_c::ConnectionState};
 use power_policy_interface::{
-    capability::{ConsumerFlags, ConsumerPowerCapability, PsuType},
+    capability::{ConsumerDisconnect, ConsumerFlags, ConsumerPowerCapability, PsuType},
     service::event::Event as PowerPolicyEvent,
 };
 use type_c_interface::{
@@ -126,8 +126,9 @@ impl Test for TestBasicConsumerFlow {
     }
 }
 
-/// Test that changing the max sink voltage while a consumer is connected disables the sink path
-/// before the renegotiation, while setting the same voltage does not.
+/// Test that changing the max sink voltage while a consumer is connected disables the sink path and
+/// notifies the power policy, which broadcasts a `ConsumerDisconnected` event with the renegotiation
+/// flag set. Setting the same voltage should do neither.
 struct TestSinkDisableOnVoltageChange;
 
 impl Test for TestSinkDisableOnVoltageChange {
@@ -170,12 +171,39 @@ impl Test for TestSinkDisableOnVoltageChange {
             with_timeout(DEFAULT_PER_CALL_TIMEOUT, power_policy_receiver.receive()),
         )
         .await;
+
         match power_policy_result {
             Ok(PowerPolicyEvent::ConsumerConnected(psu, _)) => assert!(ptr::eq(psu, port0.port)),
             _ => panic!("Did not receive consumer connected event"),
         }
 
-        // Changing the max sink voltage should disable the sink path before the renegotiation.
+        // Setting the same voltage as the active contract must not disable the sink path or disconnect.
+        {
+            let mut mock0 = port0.mock.lock().await;
+            mock0.fn_calls.clear();
+            mock0.next_result_set_max_sink_voltage.push_back(Ok(()));
+        }
+        port0.port.lock().await.set_max_sink_voltage(Some(5000)).await.unwrap();
+        {
+            let mut mock0 = port0.mock.lock().await;
+            assert!(
+                matches!(
+                    mock0.fn_calls.pop_front(),
+                    Some(ControllerFnCall::MaxSinkVoltage(
+                        MaxSinkVoltageFnCall::SetMaxSinkVoltage(_, Some(5000))
+                    ))
+                ),
+                "expected only the max sink voltage to be set without disabling the sink path"
+            );
+            assert!(mock0.fn_calls.is_empty());
+        }
+        // No disconnect should have been broadcast.
+        assert!(matches!(
+            with_timeout(DEFAULT_PER_CALL_TIMEOUT, power_policy_receiver.receive()).await,
+            Err(TimeoutError)
+        ));
+
+        // Changing the max sink voltage should disable the sink path and notify the power policy.
         {
             let mut mock0 = port0.mock.lock().await;
             mock0.fn_calls.clear();
@@ -183,6 +211,17 @@ impl Test for TestSinkDisableOnVoltageChange {
             mock0.next_result_set_max_sink_voltage.push_back(Ok(()));
         }
         port0.port.lock().await.set_max_sink_voltage(Some(9000)).await.unwrap();
+
+        // The power policy should broadcast a consumer disconnect with the renegotiation flag set.
+        match with_timeout(DEFAULT_PER_CALL_TIMEOUT, power_policy_receiver.receive()).await {
+            Ok(PowerPolicyEvent::ConsumerDisconnected(psu, flags)) => {
+                assert!(ptr::eq(psu, port0.port));
+                assert_eq!(flags, ConsumerDisconnect::none().with_renegotiation(true));
+            }
+            _ => panic!("Did not receive consumer disconnected event"),
+        }
+
+        // The sink path should have been disabled before the new voltage was applied.
         {
             let mut mock0 = port0.mock.lock().await;
             assert!(
@@ -200,50 +239,6 @@ impl Test for TestSinkDisableOnVoltageChange {
                     ))
                 ),
                 "expected the max sink voltage to be set"
-            );
-            assert!(mock0.fn_calls.is_empty());
-        }
-
-        // Removing the voltage limit (None) also requires a renegotiation, so the sink path is disabled.
-        {
-            let mut mock0 = port0.mock.lock().await;
-            mock0.fn_calls.clear();
-            mock0.next_result_enable_sink_path.push_back(Ok(()));
-            mock0.next_result_set_max_sink_voltage.push_back(Ok(()));
-        }
-        port0.port.lock().await.set_max_sink_voltage(None).await.unwrap();
-        {
-            let mut mock0 = port0.mock.lock().await;
-            assert!(matches!(
-                mock0.fn_calls.pop_front(),
-                Some(ControllerFnCall::Pd(PdFnCall::EnableSinkPath(_, false)))
-            ));
-            assert!(matches!(
-                mock0.fn_calls.pop_front(),
-                Some(ControllerFnCall::MaxSinkVoltage(
-                    MaxSinkVoltageFnCall::SetMaxSinkVoltage(_, None)
-                ))
-            ));
-            assert!(mock0.fn_calls.is_empty());
-        }
-
-        // Setting the same voltage as the active contract must not disable the sink path.
-        {
-            let mut mock0 = port0.mock.lock().await;
-            mock0.fn_calls.clear();
-            mock0.next_result_set_max_sink_voltage.push_back(Ok(()));
-        }
-        port0.port.lock().await.set_max_sink_voltage(Some(5000)).await.unwrap();
-        {
-            let mut mock0 = port0.mock.lock().await;
-            assert!(
-                matches!(
-                    mock0.fn_calls.pop_front(),
-                    Some(ControllerFnCall::MaxSinkVoltage(
-                        MaxSinkVoltageFnCall::SetMaxSinkVoltage(_, Some(5000))
-                    ))
-                ),
-                "expected only the max sink voltage to be set without disabling the sink path"
             );
             assert!(mock0.fn_calls.is_empty());
         }

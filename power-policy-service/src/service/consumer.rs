@@ -249,7 +249,12 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
     }
 
     /// Determines and connects the best external power
-    pub(super) async fn update_current_consumer(&mut self) -> Result<(), Error> {
+    ///
+    /// `disconnect_flags` describes the reason for a disconnect and is applied to the
+    /// [`ServiceEvent::ConsumerDisconnected`] event when the current consumer is removed and not
+    /// replaced by another one. When switching between consumers the flags are derived from the
+    /// switch itself (see [`Self::connect_new_consumer`]).
+    pub(super) async fn update_current_consumer(&mut self, disconnect_flags: ConsumerDisconnect) -> Result<(), Error> {
         let current_consumer_name = if let Some(current_consumer) = self.state.current_consumer_state {
             current_consumer.psu.lock().await.name()
         } else {
@@ -275,7 +280,7 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
                 self.disconnect_chargers().await?;
                 self.broadcast_event(ServiceEvent::ConsumerDisconnected(
                     current_consumer.psu,
-                    ConsumerDisconnect::none(),
+                    disconnect_flags,
                 ));
             }
             // No new consumer available

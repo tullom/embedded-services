@@ -4,7 +4,9 @@ use embassy_sync::{channel, mutex::Mutex, signal::Signal};
 use embedded_batteries_async::charger::{MilliAmps, MilliVolts};
 use embedded_services::{GlobalRawMutex, event::NonBlockingSender, info, named::Named};
 use power_policy_interface::{
-    capability::{ConsumerPowerCapability, PowerCapability, ProviderFlags, ProviderPowerCapability},
+    capability::{
+        ConsumerDisconnect, ConsumerPowerCapability, PowerCapability, ProviderFlags, ProviderPowerCapability,
+    },
     charger,
     psu::{Error, Psu, State, event::EventData},
 };
@@ -85,7 +87,9 @@ impl<'a, S: NonBlockingSender<EventData>> Mock<'a, S> {
 
     pub async fn simulate_disconnect(&mut self) {
         self.state.disconnect(true).unwrap();
-        self.sender.try_send(EventData::Disconnected).unwrap();
+        self.sender
+            .try_send(EventData::Disconnected(ConsumerDisconnect::none()))
+            .unwrap();
     }
 
     pub async fn simulate_update_requested_provider_power_capability(
