@@ -35,7 +35,10 @@ where
                 // Push will never fail since the number of receivers is the same as the capacity of the vector
                 let _ = futures.push(async move { (receiver.wait_next().await, psu) });
             }
-            select_slice(pin!(&mut futures)).await
+            // Pin the futures and deference to a slice
+            let pinned = pin!(futures);
+            // Safety: The backing buffer is contained within the heapless::Vec so it won't be moved either.
+            select_slice(unsafe { pinned.map_unchecked_mut(|f| f.as_mut()) }).await
         };
 
         Event { charger, event }
