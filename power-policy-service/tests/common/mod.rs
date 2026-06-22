@@ -17,7 +17,7 @@ use embassy_time::{Duration, with_timeout};
 use embedded_services::GlobalRawMutex;
 use power_policy_interface::psu::event::EventData;
 use power_policy_interface::{
-    capability::{ConsumerPowerCapability, PowerCapability, ProviderPowerCapability},
+    capability::{ConsumerDisconnect, ConsumerPowerCapability, PowerCapability, ProviderPowerCapability},
     service::{UnconstrainedState, event::Event as ServiceEvent},
 };
 use power_policy_service::service::{Service, config::Config, customization};
@@ -168,10 +168,22 @@ pub async fn assert_consumer_disconnected<'a>(
     receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
     expected_device: &DeviceType<'a>,
 ) {
-    let ServiceEvent::ConsumerDisconnected(device) = receiver.receive().await else {
+    let ServiceEvent::ConsumerDisconnected(device, _) = receiver.receive().await else {
         panic!("Expected ConsumerDisconnected event");
     };
     assert_eq!(device as *const _, expected_device as *const _);
+}
+
+pub async fn assert_consumer_disconnected_with_flags<'a>(
+    receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
+    expected_device: &DeviceType<'a>,
+    expected_flags: ConsumerDisconnect,
+) {
+    let ServiceEvent::ConsumerDisconnected(device, flags) = receiver.receive().await else {
+        panic!("Expected ConsumerDisconnected event");
+    };
+    assert_eq!(device as *const _, expected_device as *const _);
+    assert_eq!(flags, expected_flags);
 }
 
 pub async fn assert_consumer_connected<'a>(

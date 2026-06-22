@@ -4,7 +4,9 @@ use embassy_sync::{channel, mutex::Mutex, signal::Signal};
 use embedded_batteries_async::charger::{MilliAmps, MilliVolts};
 use embedded_services::{GlobalRawMutex, event::NonBlockingSender, info, named::Named};
 use power_policy_interface::{
-    capability::{ConsumerPowerCapability, PowerCapability, ProviderFlags, ProviderPowerCapability},
+    capability::{
+        ConsumerDisconnect, ConsumerPowerCapability, PowerCapability, ProviderFlags, ProviderPowerCapability,
+    },
     charger,
     psu::{Error, Psu, State, event::EventData},
 };
@@ -54,6 +56,14 @@ impl<'a, S: NonBlockingSender<EventData>> Mock<'a, S> {
             .unwrap();
     }
 
+    /// Simulate an already-attached consumer renegotiating a new power capability.
+    pub async fn simulate_update_consumer_power_capability(&mut self, capability: Option<ConsumerPowerCapability>) {
+        self.state.update_consumer_power_capability(capability).unwrap();
+        self.sender
+            .try_send(EventData::UpdatedConsumerCapability(capability))
+            .unwrap();
+    }
+
     pub async fn simulate_detach(&mut self) {
         self.state.detach();
         self.sender.try_send(EventData::Detached).unwrap();
@@ -77,7 +87,9 @@ impl<'a, S: NonBlockingSender<EventData>> Mock<'a, S> {
 
     pub async fn simulate_disconnect(&mut self) {
         self.state.disconnect(true).unwrap();
-        self.sender.try_send(EventData::Disconnected).unwrap();
+        self.sender
+            .try_send(EventData::Disconnected(ConsumerDisconnect::none()))
+            .unwrap();
     }
 
     pub async fn simulate_update_requested_provider_power_capability(

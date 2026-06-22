@@ -14,7 +14,7 @@ use embedded_services::{event::NonBlockingSender, info, sync::Lockable, trace};
 
 use power_policy_interface::charger::{Charger, PsuState};
 use power_policy_interface::{
-    capability::{ConsumerPowerCapability, ProviderPowerCapability},
+    capability::{ConsumerDisconnect, ConsumerPowerCapability, ProviderPowerCapability},
     charger::{Event as ChargerEvent, EventData as ChargerEventData},
     psu::{
         Error, Psu,
@@ -117,7 +117,7 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
     async fn process_notify_detach(&mut self, device: &'device Reg::Psu) -> Result<(), Error> {
         info!("({}): Received notify detached", device.lock().await.name());
         self.post_provider_removed(device).await;
-        self.update_current_consumer().await?;
+        self.update_current_consumer(ConsumerDisconnect::none()).await?;
         Ok(())
     }
 
@@ -132,7 +132,7 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
             capability,
         );
 
-        self.update_current_consumer().await
+        self.update_current_consumer(ConsumerDisconnect::none()).await
     }
 
     async fn process_request_provider_power_capabilities(
@@ -149,10 +149,14 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
         self.connect_provider(requester).await
     }
 
-    async fn process_notify_disconnect(&mut self, device: &'device Reg::Psu) -> Result<(), Error> {
+    async fn process_notify_disconnect(
+        &mut self,
+        device: &'device Reg::Psu,
+        flags: ConsumerDisconnect,
+    ) -> Result<(), Error> {
         info!("({}): Received notify disconnect", device.lock().await.name());
         self.post_provider_removed(device).await;
-        self.update_current_consumer().await?;
+        self.update_current_consumer(flags).await?;
         Ok(())
     }
 
@@ -180,7 +184,7 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
                 self.process_request_provider_power_capabilities(device, capability)
                     .await
             }
-            PsuEventData::Disconnected => self.process_notify_disconnect(device).await,
+            PsuEventData::Disconnected(flags) => self.process_notify_disconnect(device, flags).await,
             _ => {
                 info!(
                     "Received unknown PSU event from ({}): {:?}",

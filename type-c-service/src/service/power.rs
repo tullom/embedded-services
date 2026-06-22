@@ -74,7 +74,7 @@ impl<'a, Reg: Registration<'a>> Service<'a, Reg> {
     pub(super) async fn process_power_policy_event(&mut self, message: &PowerPolicyEventData) -> Result<(), Error> {
         match message {
             PowerPolicyEventData::Unconstrained(state) => self.process_unconstrained_state_change(state).await,
-            PowerPolicyEventData::ConsumerDisconnected => {
+            PowerPolicyEventData::ConsumerDisconnected(_) => {
                 self.ucsi.psu_connected = false;
                 // Notify OPM because this can affect battery charging capability status
                 if self.ucsi.notifications_enabled.battery_charge_change() {

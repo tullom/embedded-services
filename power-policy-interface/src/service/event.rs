@@ -1,7 +1,7 @@
 use embedded_services::sync::Lockable;
 
 use crate::{
-    capability::{ConsumerPowerCapability, ProviderPowerCapability},
+    capability::{ConsumerDisconnect, ConsumerPowerCapability, ProviderPowerCapability},
     psu::Psu,
     service::UnconstrainedState,
 };
@@ -16,7 +16,7 @@ use crate::{
 #[non_exhaustive]
 pub enum EventData {
     /// Consumer disconnected
-    ConsumerDisconnected,
+    ConsumerDisconnected(ConsumerDisconnect),
     /// Consumer connected
     ConsumerConnected(ConsumerPowerCapability),
     /// Provider disconnected
@@ -33,7 +33,7 @@ where
 {
     fn from(value: Event<'device, PSU>) -> Self {
         match value {
-            Event::ConsumerDisconnected(_) => EventData::ConsumerDisconnected,
+            Event::ConsumerDisconnected(_, flags) => EventData::ConsumerDisconnected(flags),
             Event::ConsumerConnected(_, capability) => EventData::ConsumerConnected(capability),
             Event::ProviderDisconnected(_) => EventData::ProviderDisconnected,
             Event::ProviderConnected(_, capability) => EventData::ProviderConnected(capability),
@@ -51,7 +51,7 @@ where
     PSU::Inner: Psu,
 {
     /// Consumer disconnected
-    ConsumerDisconnected(&'device PSU),
+    ConsumerDisconnected(&'device PSU, ConsumerDisconnect),
     /// Consumer connected
     ConsumerConnected(&'device PSU, ConsumerPowerCapability),
     /// Provider disconnected

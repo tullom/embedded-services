@@ -8,7 +8,10 @@ use super::*;
 
 use power_policy_interface::psu;
 use power_policy_interface::service::event::Event as ServiceEvent;
-use power_policy_interface::{capability::ConsumerPowerCapability, psu::PsuState};
+use power_policy_interface::{
+    capability::{ConsumerDisconnect, ConsumerPowerCapability},
+    psu::PsuState,
+};
 
 /// State of the current consumer
 #[derive(Debug, PartialEq, Eq)]
@@ -216,7 +219,15 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
             // so just continue execution.
             self.disconnect_chargers().await?;
 
-            self.broadcast_event(ServiceEvent::ConsumerDisconnected(current_consumer.psu));
+            // Indicate why the current consumer is being disconnected. If we are reconnecting
+            // the same device, it is renegotiating a new power capability. Otherwise, the service
+            // is switching to a different PSU.
+            let flags = if ptr::eq(current_consumer.psu, new_consumer.psu) {
+                ConsumerDisconnect::none().with_renegotiation(true)
+            } else {
+                ConsumerDisconnect::none().with_switching(true)
+            };
+            self.broadcast_event(ServiceEvent::ConsumerDisconnected(current_consumer.psu, flags));
 
             // Don't update the unconstrained here because this is a transitional state
         }
@@ -238,7 +249,12 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
     }
 
     /// Determines and connects the best external power
-    pub(super) async fn update_current_consumer(&mut self) -> Result<(), Error> {
+    ///
+    /// `disconnect_flags` describes the reason for a disconnect and is applied to the
+    /// [`ServiceEvent::ConsumerDisconnected`] event when the current consumer is removed and not
+    /// replaced by another one. When switching between consumers the flags are derived from the
+    /// switch itself (see [`Self::connect_new_consumer`]).
+    pub(super) async fn update_current_consumer(&mut self, disconnect_flags: ConsumerDisconnect) -> Result<(), Error> {
         let current_consumer_name = if let Some(current_consumer) = self.state.current_consumer_state {
             current_consumer.psu.lock().await.name()
         } else {
@@ -262,7 +278,10 @@ impl<'device, Reg: Registration<'device>, Customization: customization::Customiz
             // Notify disconnect if recently detached consumer was previously attached.
             if let Some(current_consumer) = self.state.current_consumer_state {
                 self.disconnect_chargers().await?;
-                self.broadcast_event(ServiceEvent::ConsumerDisconnected(current_consumer.psu));
+                self.broadcast_event(ServiceEvent::ConsumerDisconnected(
+                    current_consumer.psu,
+                    disconnect_flags,
+                ));
             }
             // No new consumer available
             self.state.current_consumer_state = None;

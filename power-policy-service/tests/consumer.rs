@@ -7,7 +7,7 @@ use embedded_services::info;
 use embedded_services::sync::Lockable;
 use power_policy_interface::capability::ProviderFlags;
 use power_policy_interface::capability::ProviderPowerCapability;
-use power_policy_interface::capability::{ConsumerFlags, ConsumerPowerCapability};
+use power_policy_interface::capability::{ConsumerDisconnect, ConsumerFlags, ConsumerPowerCapability};
 
 mod common;
 
@@ -30,7 +30,8 @@ use crate::common::assert_no_event;
 use crate::common::assert_provider_connected;
 use crate::common::assert_provider_disconnected;
 use crate::common::{
-    DEFAULT_TIMEOUT, HIGH_POWER, assert_consumer_connected, assert_consumer_disconnected, mock::FnCall, run_test,
+    DEFAULT_TIMEOUT, HIGH_POWER, assert_consumer_connected, assert_consumer_disconnected,
+    assert_consumer_disconnected_with_flags, mock::FnCall, run_test,
 };
 
 const PER_CALL_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -791,6 +792,167 @@ impl Test for TestFindBestConsumerCustomization {
     }
 }
 
+/// Test that disconnecting the current consumer to switch to a different PSU sets the
+/// `switching` flag on the [`ServiceEvent::ConsumerDisconnected`] event.
+struct TestConsumerDisconnectSwitchingFlag;
+
+impl Test for TestConsumerDisconnectSwitchingFlag {
+    type Customization = DefaultCustomization;
+
+    async fn run<'a>(
+        &mut self,
+        _service: &ServiceMutex<'a, 'a, Self::Customization>,
+        service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
+        device0: &DeviceType<'a>,
+        device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+        device1: &DeviceType<'a>,
+        device1_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+    ) {
+        info!("Running test_consumer_disconnect_switching_flag");
+        // Connect device0 at low power.
+        device0
+            .lock()
+            .await
+            .simulate_consumer_connection(LOW_POWER.into())
+            .await;
+        assert_eq!(
+            with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await.unwrap(),
+            (
+                1,
+                FnCall::ConnectConsumer(ConsumerPowerCapability {
+                    capability: LOW_POWER,
+                    flags: ConsumerFlags::none(),
+                })
+            )
+        );
+        device0_signal.reset();
+        assert_consumer_connected(
+            service_receiver,
+            device0,
+            ConsumerPowerCapability {
+                capability: LOW_POWER,
+                flags: ConsumerFlags::none(),
+            },
+        )
+        .await;
+
+        // Connect device1 at high power, the service should switch to it.
+        device1
+            .lock()
+            .await
+            .simulate_consumer_connection(HIGH_POWER.into())
+            .await;
+        assert_eq!(
+            with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await.unwrap(),
+            (1, FnCall::Disconnect)
+        );
+        device0_signal.reset();
+        assert_eq!(
+            with_timeout(PER_CALL_TIMEOUT, device1_signal.wait()).await.unwrap(),
+            (
+                1,
+                FnCall::ConnectConsumer(ConsumerPowerCapability {
+                    capability: HIGH_POWER,
+                    flags: ConsumerFlags::none(),
+                })
+            )
+        );
+        device1_signal.reset();
+
+        // device0 should be disconnected with the switching flag set since we're switching to device1.
+        assert_consumer_disconnected_with_flags(
+            service_receiver,
+            device0,
+            ConsumerDisconnect::none().with_switching(true),
+        )
+        .await;
+        assert_consumer_connected(
+            service_receiver,
+            device1,
+            ConsumerPowerCapability {
+                capability: HIGH_POWER,
+                flags: ConsumerFlags::none(),
+            },
+        )
+        .await;
+
+        assert_no_event(service_receiver);
+    }
+}
+
+/// Test that disconnecting the current consumer because it renegotiated a new power capability
+/// sets the `renegotiation` flag on the [`ServiceEvent::ConsumerDisconnected`] event.
+struct TestConsumerDisconnectRenegotiationFlag;
+
+impl Test for TestConsumerDisconnectRenegotiationFlag {
+    type Customization = DefaultCustomization;
+
+    async fn run<'a>(
+        &mut self,
+        _service: &ServiceMutex<'a, 'a, Self::Customization>,
+        service_receiver: DynamicReceiver<'a, ServiceEvent<'a, DeviceType<'a>>>,
+        device0: &DeviceType<'a>,
+        device0_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+        _device1: &DeviceType<'a>,
+        _device1_signal: &Signal<GlobalRawMutex, (usize, FnCall)>,
+    ) {
+        info!("Running test_consumer_disconnect_renegotiation_flag");
+        // Connect device0 at low power.
+        device0
+            .lock()
+            .await
+            .simulate_consumer_connection(LOW_POWER.into())
+            .await;
+        assert_eq!(
+            with_timeout(PER_CALL_TIMEOUT, device0_signal.wait()).await.unwrap(),
+            (
+                1,
+                FnCall::ConnectConsumer(ConsumerPowerCapability {
+                    capability: LOW_POWER,
+                    flags: ConsumerFlags::none(),
+                })
+            )
+        );
+        device0_signal.reset();
+        assert_consumer_connected(
+            service_receiver,
+            device0,
+            ConsumerPowerCapability {
+                capability: LOW_POWER,
+                flags: ConsumerFlags::none(),
+            },
+        )
+        .await;
+
+        // The same device renegotiates a new (higher) power capability. Since the best consumer is
+        // still the same device but with a different capability, the service disconnects and
+        // reconnects it. The disconnect event should carry the renegotiation flag.
+        device0
+            .lock()
+            .await
+            .simulate_update_consumer_power_capability(Some(HIGH_POWER.into()))
+            .await;
+
+        assert_consumer_disconnected_with_flags(
+            service_receiver,
+            device0,
+            ConsumerDisconnect::none().with_renegotiation(true),
+        )
+        .await;
+        assert_consumer_connected(
+            service_receiver,
+            device0,
+            ConsumerPowerCapability {
+                capability: HIGH_POWER,
+                flags: ConsumerFlags::none(),
+            },
+        )
+        .await;
+
+        assert_no_event(service_receiver);
+    }
+}
+
 #[tokio::test]
 async fn run_test_swap_higher() {
     run_test(
@@ -860,6 +1022,28 @@ async fn run_test_find_best_consumer_hook() {
         TestFindBestConsumerCustomization,
         Default::default(),
         AlwaysFirstConsumerCustomization,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn run_test_consumer_disconnect_switching_flag() {
+    run_test(
+        DEFAULT_TIMEOUT,
+        TestConsumerDisconnectSwitchingFlag,
+        Default::default(),
+        DefaultCustomization,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn run_test_consumer_disconnect_renegotiation_flag() {
+    run_test(
+        DEFAULT_TIMEOUT,
+        TestConsumerDisconnectRenegotiationFlag,
+        Default::default(),
+        DefaultCustomization,
     )
     .await;
 }

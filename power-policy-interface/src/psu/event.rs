@@ -2,7 +2,7 @@
 use embedded_services::sync::Lockable;
 
 use crate::{
-    capability::{ConsumerPowerCapability, ProviderPowerCapability},
+    capability::{ConsumerDisconnect, ConsumerPowerCapability, ProviderPowerCapability},
     psu,
 };
 
@@ -18,7 +18,7 @@ pub enum EventData {
     /// Request the given amount of power to provider
     RequestedProviderCapability(Option<ProviderPowerCapability>),
     /// Notify that a device cannot consume or provide power anymore
-    Disconnected,
+    Disconnected(ConsumerDisconnect),
     /// Notify that a device has detached
     Detached,
 }
