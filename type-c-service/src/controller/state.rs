@@ -14,6 +14,11 @@ impl SharedState {
             sink_ready_timeout: None,
         }
     }
+
+    /// Get the current sink ready timeout deadline, if one is pending
+    pub fn sink_ready_timeout(&self) -> Option<Instant> {
+        self.sink_ready_timeout
+    }
 }
 
 impl Default for SharedState {

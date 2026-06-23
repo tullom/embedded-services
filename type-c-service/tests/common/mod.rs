@@ -41,6 +41,12 @@ pub type PortPowerSender<'a> = DynamicSender<'a, power_policy_interface::psu::ev
 pub type PortPowerReceiver<'a> = DynamicReceiver<'a, power_policy_interface::psu::event::EventData>;
 /// [`type_c_service::controller::Port`] sender for loopback events
 pub type PortLoopbackSender<'a> = DynamicSender<'a, type_c_service::controller::event::Loopback>;
+/// Corresponding receiver for [`PortLoopbackSender`]
+pub type PortLoopbackReceiver<'a> = DynamicReceiver<'a, type_c_service::controller::event::Loopback>;
+/// Interrupt sender into a [`type_c_service::controller::Port`]'s event receiver
+pub type PortInterruptSender<'a> = DynamicSender<'a, type_c_interface::port::event::PortEventBitfield>;
+/// Corresponding receiver for [`PortInterruptSender`]
+pub type PortInterruptReceiver<'a> = DynamicReceiver<'a, type_c_interface::port::event::PortEventBitfield>;
 /// Shared port state type
 pub type PortSharedState = Mutex<GlobalRawMutex, type_c_service::controller::state::SharedState>;
 /// Port type
@@ -59,6 +65,14 @@ pub type PortMutexType<'port, 'ch> = Mutex<
         // Loopback sender
         PortLoopbackSender<'ch>,
     >,
+>;
+
+/// Controller-side event receiver that drives software sink-ready timeouts
+pub type PortEventReceiverType<'port, 'ch> = type_c_service::controller::event_receiver::EventReceiver<
+    'port,
+    PortSharedState,
+    PortInterruptReceiver<'ch>,
+    PortLoopbackReceiver<'ch>,
 >;
 
 /// Sender for events broadcast by the power policy service
@@ -117,6 +131,12 @@ pub struct TestPort<'port, 'ch> {
     pub port: &'port PortMutexType<'port, 'ch>,
     /// Underlying controller mock
     pub mock: &'port ControllerMockMutexType,
+    /// State shared between the port and its event receiver
+    pub shared_state: &'port PortSharedState,
+    /// Interrupt sender into the port's event receiver
+    pub interrupt_sender: PortInterruptSender<'ch>,
+    /// Controller-side event receiver, drives software sink-ready timeouts
+    pub event_receiver: PortEventReceiverType<'port, 'ch>,
 }
 
 /// Integration test trait
@@ -138,6 +158,9 @@ pub trait Test {
 struct PortComponents<'port, 'ch> {
     port: PortMutexType<'port, 'ch>,
     mock: &'port ControllerMockMutexType,
+    shared_state: &'port PortSharedState,
+    interrupt_sender: PortInterruptSender<'ch>,
+    event_receiver: PortEventReceiverType<'port, 'ch>,
     type_c_receiver: PortTypeCReceiver<'ch>,
     power_policy_receiver: PortPowerReceiver<'ch>,
 }
@@ -166,10 +189,24 @@ macro_rules! define_port {
             CHANNEL_SIZE,
         > = Channel::new(); }
         paste! { let [<$name _loopback_sender>] = [<$name _loopback_channel>].dyn_sender(); }
+        paste! { let [<$name _loopback_receiver>] = [<$name _loopback_channel>].dyn_receiver(); }
+
+        paste! { let [<$name _interrupt_channel>]: Channel<
+            GlobalRawMutex,
+            type_c_interface::port::event::PortEventBitfield,
+            CHANNEL_SIZE,
+        > = Channel::new(); }
+        paste! { let [<$name _interrupt_sender>] = [<$name _interrupt_channel>].dyn_sender(); }
+        paste! { let [<$name _interrupt_receiver>] = [<$name _interrupt_channel>].dyn_receiver(); }
 
         paste! { let [<$name _mock>] = Mutex::new(type_c_interface_mocks::controller::Mock::new($mock_name)); }
         paste! { let [<$name _shared_state>] =
         PortSharedState::new(type_c_service::controller::state::SharedState::new()); }
+        paste! { let [<$name _event_receiver>] = type_c_service::controller::event_receiver::EventReceiver::new(
+            &[<$name _shared_state>],
+            [<$name _interrupt_receiver>],
+            [<$name _loopback_receiver>],
+        ); }
         paste! { let $name = PortComponents {
                 port: Mutex::new(type_c_service::controller::Port::new(
                     $port_name,
@@ -182,6 +219,9 @@ macro_rules! define_port {
                     paste! { [<$name _loopback_sender>] },
             )),
             mock: &paste! { [<$name _mock>] },
+            shared_state: &paste! { [<$name _shared_state>] },
+            interrupt_sender: paste! { [<$name _interrupt_sender>] },
+            event_receiver: paste! { [<$name _event_receiver>] },
             type_c_receiver: paste! { [<$name _type_c_receiver>] },
             power_policy_receiver: paste! { [<$name _power_policy_receiver>] },
         };
@@ -264,6 +304,9 @@ pub async fn run_test(
         type_c_receiver: port0_type_c_receiver,
         power_policy_receiver: port0_power_policy_receiver,
         mock: port0_mock,
+        shared_state: port0_shared_state,
+        interrupt_sender: port0_interrupt_sender,
+        event_receiver: port0_event_receiver,
     } = port0;
 
     define_port!(port1, "mock1", "port1", port_config[1], LocalPortId(0));
@@ -272,6 +315,9 @@ pub async fn run_test(
         type_c_receiver: port1_type_c_receiver,
         power_policy_receiver: port1_power_policy_receiver,
         mock: port1_mock,
+        shared_state: port1_shared_state,
+        interrupt_sender: port1_interrupt_sender,
+        event_receiver: port1_event_receiver,
     } = port1;
 
     define_port!(port2, "mock2", "port2", port_config[2], LocalPortId(0));
@@ -280,6 +326,9 @@ pub async fn run_test(
         type_c_receiver: port2_type_c_receiver,
         power_policy_receiver: port2_power_policy_receiver,
         mock: port2_mock,
+        shared_state: port2_shared_state,
+        interrupt_sender: port2_interrupt_sender,
+        event_receiver: port2_event_receiver,
     } = port2;
 
     // Channel to broadcast events from the type-C service
@@ -375,14 +424,23 @@ pub async fn run_test(
                     TestPort {
                         port: &port0,
                         mock: port0_mock,
+                        shared_state: port0_shared_state,
+                        interrupt_sender: port0_interrupt_sender,
+                        event_receiver: port0_event_receiver,
                     },
                     TestPort {
                         port: &port1,
                         mock: port1_mock,
+                        shared_state: port1_shared_state,
+                        interrupt_sender: port1_interrupt_sender,
+                        event_receiver: port1_event_receiver,
                     },
                     TestPort {
                         port: &port2,
                         mock: port2_mock,
+                        shared_state: port2_shared_state,
+                        interrupt_sender: port2_interrupt_sender,
+                        event_receiver: port2_event_receiver,
                     },
                 )
                 .await;
