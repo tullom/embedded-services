@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
 use battery_service_interface::BatteryError;
-use battery_service_interface::fuel_gauge::{DynamicBatteryMsgs, FuelGauge, StaticBatteryMsgs};
+use battery_service_interface::fuel_gauge::{DynamicBatteryData, FuelGauge, StaticBatteryData};
 use embedded_batteries_async::acpi::{PowerSourceState, PowerUnit};
+use embedded_batteries_async::smart_battery::CapacityModeValue;
 use embedded_services::sync::Lockable;
 use embedded_services::{info, trace};
 
@@ -25,7 +26,17 @@ pub(crate) struct PsuState {
     pub power_capability: Option<PowerCapability>,
 }
 
-pub(crate) fn compute_bst(cache: &DynamicBatteryMsgs) -> embedded_batteries_async::acpi::BstReturn {
+/// Extract the raw numeric value from a [`CapacityModeValue`], discarding the unit
+/// tag. The unit (mA/mAh vs centiWatt) is conveyed to ACPI separately via the BIX
+/// `power_unit` field, which is derived from the battery's capacity mode.
+fn capacity_raw(value: CapacityModeValue) -> u32 {
+    match value {
+        CapacityModeValue::MilliAmpUnsigned(v) | CapacityModeValue::CentiWattUnsigned(v) => u32::from(v),
+    }
+}
+
+pub(crate) fn compute_bst<D: DynamicBatteryData>(cache: &D) -> embedded_batteries_async::acpi::BstReturn {
+    let cache = cache.standard();
     let charging = if cache.battery_status & (1 << 6) == 0 {
         embedded_batteries_async::acpi::BatteryState::CHARGING
     } else {
@@ -35,16 +46,18 @@ pub(crate) fn compute_bst(cache: &DynamicBatteryMsgs) -> embedded_batteries_asyn
     // TODO: add critical energy state and charge limiting state
     embedded_batteries_async::acpi::BstReturn {
         battery_state: charging,
-        battery_remaining_capacity: cache.remaining_capacity_mwh,
-        battery_present_rate: cache.current_ma.unsigned_abs().into(),
-        battery_present_voltage: cache.voltage_mv.into(),
+        battery_remaining_capacity: capacity_raw(cache.remaining_capacity),
+        battery_present_rate: cache.current.unsigned_abs().into(),
+        battery_present_voltage: cache.voltage.into(),
     }
 }
 
-pub(crate) fn compute_bix<'a>(
-    static_cache: &'a StaticBatteryMsgs,
-    dynamic_cache: &'a DynamicBatteryMsgs,
+pub(crate) fn compute_bix<S: StaticBatteryData, D: DynamicBatteryData>(
+    static_cache: &S,
+    dynamic_cache: &D,
 ) -> Result<BixFixedStrings, ()> {
+    let static_cache = static_cache.standard();
+    let dynamic_cache = dynamic_cache.standard();
     let mut bix_return = BixFixedStrings {
         revision: 1,
         power_unit: if static_cache.battery_mode.capacity_mode() {
@@ -52,20 +65,20 @@ pub(crate) fn compute_bix<'a>(
         } else {
             PowerUnit::MilliAmps
         },
-        design_capacity: static_cache.design_capacity_mwh,
-        last_full_charge_capacity: dynamic_cache.full_charge_capacity_mwh,
+        design_capacity: capacity_raw(static_cache.design_capacity),
+        last_full_charge_capacity: capacity_raw(dynamic_cache.full_charge_capacity),
         battery_technology: embedded_batteries_async::acpi::BatteryTechnology::Secondary,
-        design_voltage: static_cache.design_voltage_mv.into(),
-        design_cap_of_warning: static_cache.design_cap_warning,
-        design_cap_of_low: static_cache.design_cap_low,
+        design_voltage: static_cache.design_voltage.into(),
+        design_cap_of_warning: capacity_raw(static_cache.design_cap_warning),
+        design_cap_of_low: capacity_raw(static_cache.design_cap_low),
         cycle_count: dynamic_cache.cycle_count.into(),
-        measurement_accuracy: u32::from(100 - dynamic_cache.max_error_pct) * 1000u32,
-        max_sampling_time: static_cache.max_sample_time,
-        min_sampling_time: static_cache.min_sample_time,
-        max_averaging_interval: static_cache.max_averaging_interval,
-        min_averaging_interval: static_cache.min_averaging_interval,
-        battery_capacity_granularity_1: static_cache.cap_granularity_1,
-        battery_capacity_granularity_2: static_cache.cap_granularity_2,
+        measurement_accuracy: static_cache.measurement_accuracy,
+        max_sampling_time: static_cache.max_sample_time_ms,
+        min_sampling_time: static_cache.min_sample_time_ms,
+        max_averaging_interval: static_cache.max_averaging_interval_ms,
+        min_averaging_interval: static_cache.min_averaging_interval_ms,
+        battery_capacity_granularity_1: capacity_raw(static_cache.cap_granularity_1),
+        battery_capacity_granularity_2: capacity_raw(static_cache.cap_granularity_2),
         model_number: [0u8; STD_BIX_MODEL_SIZE],
         serial_number: [0u8; STD_BIX_SERIAL_SIZE],
         battery_type: [0u8; STD_BIX_BATTERY_SIZE],
@@ -103,7 +116,8 @@ pub(crate) fn compute_bix<'a>(
     Ok(bix_return)
 }
 
-pub(crate) fn compute_bps(dynamic_cache: &DynamicBatteryMsgs) -> embedded_batteries_async::acpi::Bps {
+pub(crate) fn compute_bps<D: DynamicBatteryData>(dynamic_cache: &D) -> embedded_batteries_async::acpi::Bps {
+    let dynamic_cache = dynamic_cache.standard();
     // TODO: period values are correct for bq40z50, add to config to support other fuel gauges
     embedded_batteries_async::acpi::Bps {
         revision: 1,
@@ -114,40 +128,43 @@ pub(crate) fn compute_bps(dynamic_cache: &DynamicBatteryMsgs) -> embedded_batter
     }
 }
 
-pub(crate) fn compute_bpc(static_cache: &StaticBatteryMsgs) -> embedded_batteries_async::acpi::Bpc {
+pub(crate) fn compute_bpc<S: StaticBatteryData>(static_cache: &S) -> embedded_batteries_async::acpi::Bpc {
+    let static_cache = static_cache.standard();
     embedded_batteries_async::acpi::Bpc {
         revision: 1,
         power_threshold_support: static_cache.power_threshold_support,
-        max_instantaneous_peak_power_threshold: static_cache.max_instant_pwr_threshold,
-        max_sustainable_peak_power_threshold: static_cache.max_sus_pwr_threshold,
+        max_instantaneous_peak_power_threshold: static_cache.max_instant_pwr_threshold_mw,
+        max_sustainable_peak_power_threshold: static_cache.max_sus_pwr_threshold_mw,
     }
 }
 
-pub(crate) fn compute_bmd(
-    static_cache: &StaticBatteryMsgs,
-    dynamic_cache: &DynamicBatteryMsgs,
+pub(crate) fn compute_bmd<S: StaticBatteryData, D: DynamicBatteryData>(
+    static_cache: &S,
+    dynamic_cache: &D,
 ) -> embedded_batteries_async::acpi::Bmd {
+    let static_cache = static_cache.standard();
+    let dynamic_cache = dynamic_cache.standard();
     embedded_batteries_async::acpi::Bmd {
         status_flags: dynamic_cache.bmd_status,
         capability_flags: static_cache.bmd_capability,
         recalibrate_count: static_cache.bmd_recalibrate_count,
-        quick_recalibrate_time: static_cache.bmd_quick_recalibrate_time,
-        slow_recalibrate_time: static_cache.bmd_slow_recalibrate_time,
+        quick_recalibrate_time: static_cache.bmd_quick_recalibrate_time_s,
+        slow_recalibrate_time: static_cache.bmd_slow_recalibrate_time_s,
     }
 }
 
-pub(crate) fn compute_bct(
+pub(crate) fn compute_bct<D: DynamicBatteryData>(
     payload: &embedded_batteries_async::acpi::Bct,
-    _dynamic_cache: &DynamicBatteryMsgs,
+    _dynamic_cache: &D,
 ) -> embedded_batteries_async::acpi::BctReturnResult {
     // Just echo back charge level for now
     // TODO: Actually compute time from charge level
     embedded_batteries_async::acpi::BctReturnResult::from(payload.charge_level_percent)
 }
 
-pub(crate) fn compute_btm(
+pub(crate) fn compute_btm<D: DynamicBatteryData>(
     payload: &embedded_batteries_async::acpi::Btm,
-    _dynamic_cache: &DynamicBatteryMsgs,
+    _dynamic_cache: &D,
 ) -> embedded_batteries_async::acpi::BtmReturnResult {
     // Just echo back charge level for now
     // TODO: Actually compute time from charge level
@@ -368,5 +385,102 @@ impl<'hw, Reg: crate::registration::Registration<'hw>> crate::Service<'hw, Reg> 
     ) -> Result<StaReturn, BatteryError> {
         trace!("Battery service: got STA command!");
         Ok(compute_sta())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use embedded_batteries_async::smart_battery::CapacityModeValue;
+
+    use super::{compute_bix, compute_bpc, compute_bst};
+    use battery_service_interface::fuel_gauge::{
+        DynamicBatteryData, DynamicBatteryMsgs, StaticBatteryData, StaticBatteryMsgs,
+    };
+
+    /// An OEM dynamic data type that embeds the standard messages and extends
+    /// them with extra fields.
+    struct OemDynamic {
+        standard: DynamicBatteryMsgs,
+        oem_cell_imbalance_mv: u16,
+    }
+
+    impl DynamicBatteryData for OemDynamic {
+        fn standard(&self) -> &DynamicBatteryMsgs {
+            &self.standard
+        }
+    }
+
+    /// An OEM static data type that embeds the standard messages and extends them.
+    struct OemStatic {
+        standard: StaticBatteryMsgs,
+        oem_part_number: u32,
+    }
+
+    impl StaticBatteryData for OemStatic {
+        fn standard(&self) -> &StaticBatteryMsgs {
+            &self.standard
+        }
+    }
+
+    /// The service must compute standard ACPI values from the embedded standard
+    /// data of an OEM-extended type, identically to using the standard type directly.
+    #[test]
+    fn compute_from_extended_type_matches_standard() {
+        let standard = DynamicBatteryMsgs {
+            remaining_capacity: CapacityModeValue::MilliAmpUnsigned(5000),
+            voltage: 12000,
+            current: -1500,
+            battery_status: 0,
+            ..Default::default()
+        };
+        let oem = OemDynamic {
+            standard,
+            oem_cell_imbalance_mv: 42,
+        };
+
+        let from_standard = compute_bst(&standard);
+        let from_oem = compute_bst(&oem);
+
+        assert_eq!(
+            from_oem.battery_remaining_capacity,
+            from_standard.battery_remaining_capacity
+        );
+        assert_eq!(from_oem.battery_present_voltage, from_standard.battery_present_voltage);
+        assert_eq!(from_oem.battery_present_rate, from_standard.battery_present_rate);
+        // The extended field is still readable from the concrete type.
+        assert_eq!(oem.oem_cell_imbalance_mv, 42);
+    }
+
+    /// `compute_*` functions taking both caches accept OEM-extended types for each.
+    #[test]
+    fn compute_bix_and_bpc_accept_extended_types() {
+        let oem_static = OemStatic {
+            standard: StaticBatteryMsgs {
+                design_capacity: CapacityModeValue::MilliAmpUnsigned(9000),
+                design_voltage: 12000,
+                ..Default::default()
+            },
+            oem_part_number: 0xABCD,
+        };
+        let oem_dynamic = OemDynamic {
+            standard: DynamicBatteryMsgs {
+                full_charge_capacity: CapacityModeValue::MilliAmpUnsigned(8500),
+                ..Default::default()
+            },
+            oem_cell_imbalance_mv: 7,
+        };
+
+        let bix = compute_bix(&oem_static, &oem_dynamic).expect("bix should compute");
+        assert_eq!(bix.design_capacity, 9000);
+        assert_eq!(bix.last_full_charge_capacity, 8500);
+
+        let bpc = compute_bpc(&oem_static);
+        assert_eq!(
+            bpc.max_instantaneous_peak_power_threshold,
+            oem_static.standard.max_instant_pwr_threshold_mw
+        );
+        assert_eq!(oem_static.oem_part_number, 0xABCD);
     }
 }

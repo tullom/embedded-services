@@ -58,6 +58,8 @@ embedded_batteries_async::impl_smart_battery_for_wrapper_type!(Battery, driver, 
 
 impl bs::FuelGauge for Battery {
     type FuelGaugeError = BatteryError;
+    type StaticData = bs::StaticBatteryMsgs;
+    type DynamicData = bs::DynamicBatteryMsgs;
 
     async fn initialize(&mut self) -> Result<(), Self::FuelGaugeError> {
         self.driver
@@ -83,73 +85,70 @@ impl bs::FuelGauge for Battery {
     }
 
     async fn update_static_data(&mut self) -> Result<(), Self::FuelGaugeError> {
-        let mut buf = [0u8; 21];
-        let mut new_msgs = bs::StaticBatteryMsgs {
-            design_capacity_mwh: match self.design_capacity().await? {
-                embedded_batteries_async::smart_battery::CapacityModeValue::CentiWattUnsigned(_) => 0xDEADBEEF,
-                embedded_batteries_async::smart_battery::CapacityModeValue::MilliAmpUnsigned(design_capacity) => {
-                    design_capacity.into()
-                }
-            },
-            design_voltage_mv: self.design_voltage().await?,
-            ..Default::default()
-        };
+        let design_capacity = self.design_capacity().await?;
+        let design_voltage = self.design_voltage().await?;
+        let mut device_chemistry = [0u8; 5];
+        self.device_chemistry(&mut device_chemistry).await?;
 
-        let buf_len = new_msgs.device_chemistry.len();
-        self.device_chemistry(&mut buf[..buf_len]).await?;
-        new_msgs.device_chemistry.copy_from_slice(&buf[..buf_len]);
-
-        self.state_mut().on_static_data(new_msgs);
+        self.state_mut().on_static_data(|s| {
+            s.design_capacity = design_capacity;
+            s.design_voltage = design_voltage;
+            s.device_chemistry = device_chemistry;
+        });
         Ok(())
     }
 
     async fn update_dynamic_data(&mut self) -> Result<(), Self::FuelGaugeError> {
-        let new_msgs = bs::DynamicBatteryMsgs {
-            average_current_ma: self.average_current().await?,
-            battery_status: self.battery_status().await?.into(),
-            max_power_mw: self
-                .driver
-                .device
-                .max_turbo_power()
-                .read_async()
-                .await?
-                .max_turbo_power()
-                .unsigned_abs()
-                .into(),
-            battery_temp_dk: self.temperature().await?,
-            sus_power_mw: self
-                .driver
-                .device
-                .sus_turbo_power()
-                .read_async()
-                .await?
-                .sus_turbo_power()
-                .unsigned_abs()
-                .into(),
-            charging_current_ma: self.charging_current().await?,
-            charging_voltage_mv: self.charging_voltage().await?,
-            voltage_mv: self.voltage().await?,
-            current_ma: self.current().await?,
-            full_charge_capacity_mwh: match self.full_charge_capacity().await? {
-                embedded_batteries_async::smart_battery::CapacityModeValue::CentiWattUnsigned(_) => 0xDEADBEEF,
-                embedded_batteries_async::smart_battery::CapacityModeValue::MilliAmpUnsigned(capacity) => {
-                    capacity.into()
-                }
-            },
-            remaining_capacity_mwh: match self.remaining_capacity().await? {
-                embedded_batteries_async::smart_battery::CapacityModeValue::CentiWattUnsigned(_) => 0xDEADBEEF,
-                embedded_batteries_async::smart_battery::CapacityModeValue::MilliAmpUnsigned(capacity) => {
-                    capacity.into()
-                }
-            },
-            relative_soc_pct: self.relative_state_of_charge().await?.into(),
-            cycle_count: self.cycle_count().await?,
-            max_error_pct: self.max_error().await?.into(),
-            bmd_status: embedded_batteries_async::acpi::BmdStatusFlags::default(),
-            turbo_vload_mv: 0,
-            turbo_rhf_effective_mohm: 0,
-        };
-        self.state_mut().on_dynamic_data(new_msgs);
+        let average_current = self.average_current().await?;
+        let battery_status: u16 = self.battery_status().await?.into();
+        let max_power: u32 = self
+            .driver
+            .device
+            .max_turbo_power()
+            .read_async()
+            .await?
+            .max_turbo_power()
+            .unsigned_abs()
+            .into();
+        let battery_temp = self.temperature().await?;
+        let sus_power: u32 = self
+            .driver
+            .device
+            .sus_turbo_power()
+            .read_async()
+            .await?
+            .sus_turbo_power()
+            .unsigned_abs()
+            .into();
+        let charging_current = self.charging_current().await?;
+        let charging_voltage = self.charging_voltage().await?;
+        let voltage = self.voltage().await?;
+        let current = self.current().await?;
+        let full_charge_capacity = self.full_charge_capacity().await?;
+        let remaining_capacity = self.remaining_capacity().await?;
+        let relative_soc = self.relative_state_of_charge().await?;
+        let cycle_count = self.cycle_count().await?;
+        let max_error = self.max_error().await?;
+
+        self.state_mut().on_dynamic_data(|d| {
+            d.average_current = average_current;
+            d.battery_status = battery_status;
+            d.max_power_mw = max_power;
+            d.battery_temp = battery_temp;
+            d.sus_power_mw = sus_power;
+            d.charging_current = charging_current;
+            d.charging_voltage = charging_voltage;
+            d.voltage = voltage;
+            d.current = current;
+            d.full_charge_capacity = full_charge_capacity;
+            d.remaining_capacity = remaining_capacity;
+            d.relative_soc = relative_soc;
+            d.cycle_count = cycle_count;
+            d.max_error = max_error;
+            d.bmd_status = embedded_batteries_async::acpi::BmdStatusFlags::default();
+            d.turbo_vload = 0;
+            d.turbo_rhf_effective_mohm = 0;
+        });
         Ok(())
     }
 
