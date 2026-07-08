@@ -127,6 +127,11 @@ impl<
             self.process_plug_event(&new_status).await?;
         }
 
+        // Tear down the previous contract on a power role swap before establishing the new one
+        if status_event.power_swap_completed() {
+            self.process_power_role_swap(&new_status).await?;
+        }
+
         // Only notify power policy of a contract after Sink Ready event (always after explicit or implicit contract)
         if status_event.sink_ready() {
             self.process_new_consumer_contract(&new_status).await?;

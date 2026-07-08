@@ -6,7 +6,7 @@ use embedded_usb_pd::{
     constants::{T_PS_TRANSITION_EPR_MS, T_PS_TRANSITION_SPR_MS},
 };
 use power_policy_interface::{
-    capability::{ConsumerPowerCapability, ProviderPowerCapability, PsuType},
+    capability::{ConsumerDisconnect, ConsumerPowerCapability, ProviderPowerCapability, PsuType},
     psu::{Error as PsuError, Psu, State},
 };
 use type_c_interface::controller::power::SystemPowerStateStatus;
@@ -73,6 +73,53 @@ impl<
         {
             error!("Failed to send requested provider capability event");
         }
+        Ok(())
+    }
+
+    /// Handle a power role swap
+    ///
+    /// Called on a `power_swap_completed` event. The power policy rejects a new-role connection
+    /// while the device is still tracked in its old connected role, so tear the old role down first:
+    /// disable the sink path if we were consuming, reset the local PSU state, and notify the power
+    /// policy of the disconnect. The following contract event then connects the new role.
+    pub(super) async fn process_power_role_swap(&mut self, new_status: &PortStatus) -> Result<(), PdError> {
+        // Only act while the port stays connected.
+        if !new_status.is_connected() {
+            return Ok(());
+        }
+
+        // Nothing to tear down unless we're currently connected in a power role.
+        let was_consumer = match self.psu_state.psu_state {
+            PsuState::ConnectedConsumer(_) => true,
+            PsuState::ConnectedProvider(_) => false,
+            _ => return Ok(()),
+        };
+
+        info!(
+            "({}): Power role swap completed, tearing down previous contract",
+            self.name
+        );
+
+        // Disable the sink path if we were consuming power so the source can safely stop.
+        if was_consumer {
+            self.controller.lock().await.enable_sink_path(self.port, false).await?;
+        }
+
+        // Reset our local state and notify the power policy so it stops tracking us in the previous
+        // role and broadcasts the matching disconnect event.
+        if let Err(e) = self.psu_state.disconnect(true) {
+            error!("({}): Error updating PSU state on role swap: {:?}", self.name, e);
+        }
+        if self
+            .power_policy_sender
+            .try_send(power_policy_interface::psu::event::EventData::Disconnected(
+                ConsumerDisconnect::none(),
+            ))
+            .is_none()
+        {
+            error!("({}): Failed to notify power policy of role swap disconnect", self.name);
+        }
+
         Ok(())
     }
 
