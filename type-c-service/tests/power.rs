@@ -513,6 +513,300 @@ impl Test for TestSinkDisableOnVoltageChange {
     }
 }
 
+/// Test a power role swap from consumer to provider.
+///
+/// Starting from a connected consumer, a power role swap turns the port into a provider. The port
+/// should tear down the consumer contract and stand up the new provider contract, so the power
+/// policy service must broadcast a `ConsumerDisconnected` event followed by a `ProviderConnected`
+/// event carrying the negotiated provider capability. The internal `psu_state` must end up in
+/// `ConnectedProvider`.
+struct TestConsumerToProviderRoleSwap;
+
+impl Test for TestConsumerToProviderRoleSwap {
+    async fn run<'port, 'ch>(
+        &mut self,
+        _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
+        power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
+        port0: TestPort<'port, 'ch>,
+        _port1: TestPort<'port, 'ch>,
+        _port2: TestPort<'port, 'ch>,
+    ) {
+        // The port should start out detached.
+        assert_eq!(port0.port.lock().await.state().psu_state, PsuState::Detached);
+
+        // Bring up a connected consumer at 5V.
+        {
+            let mut mock0 = port0.mock.lock().await;
+            mock0.next_result_get_port_status.push_back(Ok(PortStatus {
+                available_sink_contract: Some(POWER_CAPABILITY_5V_1A5),
+                connection_state: Some(ConnectionState::Attached),
+                power_role: PowerRole::Sink,
+                ..Default::default()
+            }));
+            // Sink path is enabled when the power policy connects the consumer.
+            mock0.next_result_enable_sink_path.push_back(Ok(()));
+        }
+
+        let mut port_event = PortStatusEventBitfield::none();
+        port_event.set_plug_inserted_or_removed(true);
+        port_event.set_new_power_contract_as_consumer(true);
+        port_event.set_sink_ready(true);
+        port0
+            .port
+            .lock()
+            .await
+            .process_event(Event::PortEvent(PortEvent::StatusChanged(port_event)))
+            .await
+            .unwrap();
+
+        // The power policy should connect the consumer first.
+        match with_timeout(DEFAULT_PER_CALL_TIMEOUT, power_policy_receiver.receive()).await {
+            Ok(PowerPolicyEvent::ConsumerConnected(psu, capability)) => {
+                assert_eq!(
+                    capability,
+                    ConsumerPowerCapability {
+                        capability: POWER_CAPABILITY_5V_1A5,
+                        flags: ConsumerFlags::none().with_psu_type(PsuType::TypeC),
+                    }
+                );
+                assert!(ptr::eq(psu, port0.port));
+            }
+            _ => panic!("Did not receive consumer connected event"),
+        }
+        assert!(matches!(
+            port0.port.lock().await.state().psu_state,
+            PsuState::ConnectedConsumer(_)
+        ));
+
+        // Send the power swap completed event.
+        {
+            let mut mock0 = port0.mock.lock().await;
+            mock0.next_result_get_port_status.push_back(Ok(PortStatus {
+                connection_state: Some(ConnectionState::Attached),
+                power_role: PowerRole::Source,
+                ..Default::default()
+            }));
+            // The consumer is torn down as part of the swap, which disables the sink path.
+            mock0.next_result_enable_sink_path.push_back(Ok(()));
+        }
+
+        let mut port_event = PortStatusEventBitfield::none();
+        port_event.set_power_swap_completed(true);
+        port0
+            .port
+            .lock()
+            .await
+            .process_event(Event::PortEvent(PortEvent::StatusChanged(port_event)))
+            .await
+            .unwrap();
+
+        // The consumer should disconnect as soon as the swap completes.
+        match with_timeout(DEFAULT_PER_CALL_TIMEOUT, power_policy_receiver.receive()).await {
+            Ok(PowerPolicyEvent::ConsumerDisconnected(psu, _)) => {
+                assert!(ptr::eq(psu, port0.port));
+            }
+            _ => panic!("Did not receive consumer disconnected event on role swap"),
+        }
+
+        // The port is torn down to an idle state between the swap and the new contract.
+        assert_eq!(port0.port.lock().await.state().psu_state, PsuState::Idle);
+
+        // The sink path should be disabled as part of tearing down the consumer contract.
+        {
+            let mock0 = port0.mock.lock().await;
+            assert!(
+                mock0
+                    .fn_calls
+                    .iter()
+                    .any(|call| matches!(call, ControllerFnCall::Pd(PdFnCall::EnableSinkPath(_, false)))),
+                "expected sink path to be disabled on role swap"
+            );
+        }
+
+        // Event 3: the new provider contract is negotiated.
+        {
+            let mut mock0 = port0.mock.lock().await;
+            mock0.next_result_get_port_status.push_back(Ok(PortStatus {
+                available_source_contract: Some(POWER_CAPABILITY_5V_1A5),
+                connection_state: Some(ConnectionState::Attached),
+                power_role: PowerRole::Source,
+                ..Default::default()
+            }));
+        }
+
+        let mut port_event = PortStatusEventBitfield::none();
+        port_event.set_new_power_contract_as_provider(true);
+        port0
+            .port
+            .lock()
+            .await
+            .process_event(Event::PortEvent(PortEvent::StatusChanged(port_event)))
+            .await
+            .unwrap();
+
+        // The power policy should broadcast the new provider contract.
+        match with_timeout(DEFAULT_PER_CALL_TIMEOUT, power_policy_receiver.receive()).await {
+            Ok(PowerPolicyEvent::ProviderConnected(psu, capability)) => {
+                assert_eq!(
+                    capability,
+                    ProviderPowerCapability {
+                        capability: POWER_CAPABILITY_5V_1A5,
+                        flags: ProviderFlags::none().with_psu_type(PsuType::TypeC),
+                    }
+                );
+                assert!(ptr::eq(psu, port0.port));
+            }
+            _ => panic!("Did not receive provider connected event on role swap"),
+        }
+
+        // The port should now be tracking a connected provider internally.
+        assert!(matches!(
+            port0.port.lock().await.state().psu_state,
+            PsuState::ConnectedProvider(_)
+        ));
+    }
+}
+
+/// Test a power role swap from provider to consumer.
+///
+/// Starting from a connected provider, a power role swap turns the port into a consumer. The port
+/// should tear down the provider contract and stand up the new consumer contract, so the power
+/// policy service must broadcast a `ProviderDisconnected` event followed by a `ConsumerConnected`
+/// event carrying the negotiated consumer capability. The internal `psu_state` must end up in
+/// `ConnectedConsumer`.
+struct TestProviderToConsumerRoleSwap;
+
+impl Test for TestProviderToConsumerRoleSwap {
+    async fn run<'port, 'ch>(
+        &mut self,
+        _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
+        power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
+        port0: TestPort<'port, 'ch>,
+        _port1: TestPort<'port, 'ch>,
+        _port2: TestPort<'port, 'ch>,
+    ) {
+        // The port should start out detached.
+        assert_eq!(port0.port.lock().await.state().psu_state, PsuState::Detached);
+
+        // Bring up a connected provider at 5V.
+        {
+            let mut mock0 = port0.mock.lock().await;
+            mock0.next_result_get_port_status.push_back(Ok(PortStatus {
+                available_source_contract: Some(POWER_CAPABILITY_5V_1A5),
+                connection_state: Some(ConnectionState::Attached),
+                power_role: PowerRole::Source,
+                ..Default::default()
+            }));
+        }
+
+        let mut port_event = PortStatusEventBitfield::none();
+        port_event.set_plug_inserted_or_removed(true);
+        port_event.set_new_power_contract_as_provider(true);
+        port0
+            .port
+            .lock()
+            .await
+            .process_event(Event::PortEvent(PortEvent::StatusChanged(port_event)))
+            .await
+            .unwrap();
+
+        // The power policy should connect the provider first.
+        match with_timeout(DEFAULT_PER_CALL_TIMEOUT, power_policy_receiver.receive()).await {
+            Ok(PowerPolicyEvent::ProviderConnected(psu, capability)) => {
+                assert_eq!(
+                    capability,
+                    ProviderPowerCapability {
+                        capability: POWER_CAPABILITY_5V_1A5,
+                        flags: ProviderFlags::none().with_psu_type(PsuType::TypeC),
+                    }
+                );
+                assert!(ptr::eq(psu, port0.port));
+            }
+            _ => panic!("Did not receive provider connected event"),
+        }
+        assert!(matches!(
+            port0.port.lock().await.state().psu_state,
+            PsuState::ConnectedProvider(_)
+        ));
+
+        // Send the power swap completed event.
+        {
+            let mut mock0 = port0.mock.lock().await;
+            mock0.next_result_get_port_status.push_back(Ok(PortStatus {
+                connection_state: Some(ConnectionState::Attached),
+                power_role: PowerRole::Sink,
+                ..Default::default()
+            }));
+        }
+
+        let mut port_event = PortStatusEventBitfield::none();
+        port_event.set_power_swap_completed(true);
+        port0
+            .port
+            .lock()
+            .await
+            .process_event(Event::PortEvent(PortEvent::StatusChanged(port_event)))
+            .await
+            .unwrap();
+
+        // The provider should disconnect as soon as the swap completes.
+        match with_timeout(DEFAULT_PER_CALL_TIMEOUT, power_policy_receiver.receive()).await {
+            Ok(PowerPolicyEvent::ProviderDisconnected(psu)) => {
+                assert!(ptr::eq(psu, port0.port));
+            }
+            _ => panic!("Did not receive provider disconnected event on role swap"),
+        }
+
+        // The port is torn down to an idle state between the swap and the new contract.
+        assert_eq!(port0.port.lock().await.state().psu_state, PsuState::Idle);
+
+        // The new consumer contract is negotiated.
+        {
+            let mut mock0 = port0.mock.lock().await;
+            mock0.next_result_get_port_status.push_back(Ok(PortStatus {
+                available_sink_contract: Some(POWER_CAPABILITY_5V_1A5),
+                connection_state: Some(ConnectionState::Attached),
+                power_role: PowerRole::Sink,
+                ..Default::default()
+            }));
+            // Sink path is enabled when the power policy connects the new consumer.
+            mock0.next_result_enable_sink_path.push_back(Ok(()));
+        }
+
+        let mut port_event = PortStatusEventBitfield::none();
+        port_event.set_new_power_contract_as_consumer(true);
+        port_event.set_sink_ready(true);
+        port0
+            .port
+            .lock()
+            .await
+            .process_event(Event::PortEvent(PortEvent::StatusChanged(port_event)))
+            .await
+            .unwrap();
+
+        // Then the power policy should broadcast the new consumer contract.
+        match with_timeout(DEFAULT_PER_CALL_TIMEOUT, power_policy_receiver.receive()).await {
+            Ok(PowerPolicyEvent::ConsumerConnected(psu, capability)) => {
+                assert_eq!(
+                    capability,
+                    ConsumerPowerCapability {
+                        capability: POWER_CAPABILITY_5V_1A5,
+                        flags: ConsumerFlags::none().with_psu_type(PsuType::TypeC),
+                    }
+                );
+                assert!(ptr::eq(psu, port0.port));
+            }
+            _ => panic!("Did not receive consumer connected event on role swap"),
+        }
+
+        // The port should now be tracking a connected consumer internally.
+        assert!(matches!(
+            port0.port.lock().await.state().psu_state,
+            PsuState::ConnectedConsumer(_)
+        ));
+    }
+}
+
 #[tokio::test]
 async fn test_basic_consumer_flow() {
     common::run_test(
@@ -553,6 +847,28 @@ async fn test_sink_disable_on_voltage_change() {
         Default::default(),
         Default::default(),
         TestSinkDisableOnVoltageChange,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_consumer_to_provider_role_swap() {
+    common::run_test(
+        DEFAULT_TEST_DURATION,
+        Default::default(),
+        Default::default(),
+        TestConsumerToProviderRoleSwap,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_provider_to_consumer_role_swap() {
+    common::run_test(
+        DEFAULT_TEST_DURATION,
+        Default::default(),
+        Default::default(),
+        TestProviderToConsumerRoleSwap,
     )
     .await;
 }
