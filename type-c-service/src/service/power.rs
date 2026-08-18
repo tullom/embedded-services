@@ -33,8 +33,7 @@ impl<'a, Reg: Registration<'a>> Service<'a, Reg> {
                 // Only one unconstrained device is present, see if that's one of our ports
                 let mut unconstrained_port = None;
                 for port in self.registration.ports().iter() {
-                    let status = port.lock().await.get_port_status().await?;
-                    if status.available_sink_contract.is_some() && status.unconstrained_power {
+                    if port.lock().await.reports_unconstrained_power() {
                         unconstrained_port = Some(*port);
                         break;
                     }

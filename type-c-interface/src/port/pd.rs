@@ -28,6 +28,12 @@ pub trait Pd: Named {
     /// Set port unconstrained status
     fn set_unconstrained_power(&mut self, unconstrained: bool) -> impl Future<Output = Result<(), PdError>>;
 
+    /// Returns whether this port reports unconstrained power to the system.
+    ///
+    /// This is the port's own determination and can differ from
+    /// [`PortStatus::unconstrained_power`], which is what the partner reports in its PDO.
+    fn reports_unconstrained_power(&self) -> bool;
+
     /// Get the Rx Other VDM data for this port
     fn get_other_vdm(&mut self) -> impl Future<Output = Result<OtherVdm, PdError>>;
     /// Get the Rx Attention VDM data for this port

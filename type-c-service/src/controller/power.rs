@@ -25,16 +25,25 @@ impl<
     LoopbackSender: NonBlockingSender<event::Loopback>,
 > Port<'device, C, Shared, PortNotifier, PowerNotifier, LoopbackSender>
 {
+    /// Whether the sink contract in the given status is unconstrained, per this port's configuration
+    pub(super) fn is_unconstrained_sink(&self, status: &PortStatus) -> bool {
+        let Some(contract) = status.available_sink_contract else {
+            return false;
+        };
+
+        match self.config.unconstrained_sink {
+            UnconstrainedSink::Auto => status.unconstrained_power,
+            UnconstrainedSink::PowerThresholdMilliwatts(threshold) => contract.max_power_mw() >= threshold,
+            UnconstrainedSink::Never => false,
+        }
+    }
+
     /// Handle a new contract as consumer
     pub(super) async fn process_new_consumer_contract(&mut self, new_status: &PortStatus) -> Result<(), PdError> {
         info!("Process new consumer contract");
+        let unconstrained = self.is_unconstrained_sink(new_status);
         let available_sink_contract = new_status.available_sink_contract.map(|c| {
             let mut c: ConsumerPowerCapability = c.into();
-            let unconstrained = match self.config.unconstrained_sink {
-                UnconstrainedSink::Auto => new_status.unconstrained_power,
-                UnconstrainedSink::PowerThresholdMilliwatts(threshold) => c.capability.max_power_mw() >= threshold,
-                UnconstrainedSink::Never => false,
-            };
             c.flags.set_unconstrained_power(unconstrained);
             c.flags.set_psu_type(PsuType::TypeC);
             c

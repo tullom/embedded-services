@@ -234,6 +234,10 @@ where
         Ok(())
     }
 
+    fn reports_unconstrained_power(&self) -> bool {
+        self.status.available_sink_contract.is_some() && self.status.unconstrained_power
+    }
+
     async fn get_other_vdm(&mut self) -> Result<OtherVdm, PdError> {
         Ok(OtherVdm::default())
     }

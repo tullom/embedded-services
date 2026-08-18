@@ -114,6 +114,10 @@ impl<
             .await
     }
 
+    fn reports_unconstrained_power(&self) -> bool {
+        self.is_unconstrained_sink(&self.status)
+    }
+
     async fn get_other_vdm(&mut self) -> Result<OtherVdm, PdError> {
         self.controller.lock().await.get_other_vdm(self.port).await
     }
