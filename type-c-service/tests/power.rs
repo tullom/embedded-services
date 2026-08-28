@@ -41,6 +41,7 @@ struct TestBasicConsumerFlow;
 impl Test for TestBasicConsumerFlow {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -163,6 +164,7 @@ struct TestBasicProviderFlow;
 impl Test for TestBasicProviderFlow {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -287,6 +289,7 @@ struct TestConsumerFlowTimerSinkReady;
 impl Test for TestConsumerFlowTimerSinkReady {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -433,6 +436,7 @@ struct TestSinkDisableOnVoltageChange;
 impl Test for TestSinkDisableOnVoltageChange {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -556,6 +560,7 @@ struct TestSetMaxVoltageSinkReadyDeadlineInvalidation;
 impl Test for TestSetMaxVoltageSinkReadyDeadlineInvalidation {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -648,6 +653,7 @@ struct TestSetMaxSinkVoltageRecovery;
 impl Test for TestSetMaxSinkVoltageRecovery {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -807,6 +813,7 @@ struct TestConsumerToProviderRoleSwap;
 impl Test for TestConsumerToProviderRoleSwap {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -972,6 +979,7 @@ struct TestProviderToConsumerRoleSwap;
 impl Test for TestProviderToConsumerRoleSwap {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -1111,6 +1119,7 @@ struct TestHardResetDisconnect;
 impl Test for TestHardResetDisconnect {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -1184,6 +1193,7 @@ struct TestHardResetSinkReady;
 impl Test for TestHardResetSinkReady {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         _power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -1243,6 +1253,7 @@ struct TestProviderRecontractAfterHardReset;
 impl Test for TestProviderRecontractAfterHardReset {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,

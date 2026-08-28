@@ -207,6 +207,7 @@ struct TestUnconstrained;
 impl Test for TestUnconstrained {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,
@@ -283,6 +284,7 @@ struct TestUnconstrainedPowerThreshold;
 impl Test for TestUnconstrainedPowerThreshold {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         _type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         port0: TestPort<'port, 'ch>,

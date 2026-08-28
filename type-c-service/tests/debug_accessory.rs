@@ -98,6 +98,7 @@ struct TestDebugAccessorySource;
 impl Test for TestDebugAccessorySource {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         mut port0: TestPort<'port, 'ch>,
@@ -169,6 +170,7 @@ struct TestNonDebugAttach;
 impl Test for TestNonDebugAttach {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         mut port0: TestPort<'port, 'ch>,
@@ -208,6 +210,7 @@ struct TestDebugAccessoryNoRenotify;
 impl Test for TestDebugAccessoryNoRenotify {
     async fn run<'port, 'ch>(
         &mut self,
+        _service: &common::TypeCServiceMutexType<'port, 'ch>,
         type_c_receiver: TypeCServiceReceiver<'port, 'ch>,
         power_policy_receiver: PowerPolicyServiceReceiver<'port, 'ch>,
         mut port0: TestPort<'port, 'ch>,
