@@ -2,7 +2,7 @@ use embassy_time::TimeoutError;
 use embedded_services::relay::hid::HidError;
 
 //  HID errors
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) enum ProtocolError {
     /// Invalid data
@@ -40,12 +40,6 @@ impl<BusError> From<ProtocolError> for Error<BusError> {
 impl<BusError> From<HidError> for Error<BusError> {
     fn from(err: HidError) -> Self {
         Error::Device(err)
-    }
-}
-
-impl<BusError> From<generic_array::LengthError> for Error<BusError> {
-    fn from(_: generic_array::LengthError) -> Self {
-        Error::Protocol(ProtocolError::InvalidSize)
     }
 }
 
