@@ -287,3 +287,210 @@ impl<'device, PSU: Lockable<Inner: Psu>, S: Sender<Event<'device, PSU>>> From<S>
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::{
+        future::{Future, poll_fn},
+        pin::pin,
+        ptr,
+        task::{Context, Poll, Waker},
+    };
+
+    use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel, mutex::Mutex};
+
+    use super::{Event, EventData, PowerPolicySubscriber, Receiver, UnconstrainedState};
+    use crate::{
+        capability::{
+            ConsumerPowerCapability, DisconnectFlags, DisconnectReason, PowerCapability, ProviderPowerCapability,
+        },
+        psu,
+    };
+
+    #[derive(Default)]
+    struct TestPsu(psu::State);
+
+    impl psu::Psu for TestPsu {
+        async fn disconnect(&mut self) -> Result<(), psu::Error> {
+            self.0.disconnect(false)
+        }
+
+        async fn connect_provider(&mut self, capability: ProviderPowerCapability) -> Result<(), psu::Error> {
+            self.0.connect_provider(capability)
+        }
+
+        async fn connect_consumer(&mut self, capability: ConsumerPowerCapability) -> Result<(), psu::Error> {
+            self.0.connect_consumer(capability)
+        }
+
+        fn state(&self) -> &psu::State {
+            &self.0
+        }
+
+        fn state_mut(&mut self) -> &mut psu::State {
+            &mut self.0
+        }
+    }
+
+    impl embedded_services::named::Named for TestPsu {
+        fn name(&self) -> &'static str {
+            "Test PSU"
+        }
+    }
+
+    fn poll_once<E>(receiver: &mut impl Receiver<E>) -> Poll<E> {
+        let mut future = pin!(receiver.wait_next());
+        future.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    #[test]
+    fn subscriber_forwards_event_payloads_in_order() {
+        let events = [
+            EventData::ConsumerConnected(
+                PowerCapability {
+                    voltage_mv: 5000,
+                    current_ma: 1500,
+                }
+                .into(),
+            ),
+            EventData::ConsumerDisconnected(DisconnectFlags {
+                reason: Some(DisconnectReason::Switching),
+            }),
+            EventData::ProviderConnected(
+                PowerCapability {
+                    voltage_mv: 20_000,
+                    current_ma: 5000,
+                }
+                .into(),
+            ),
+            EventData::ProviderDisconnected,
+            EventData::Unconstrained(UnconstrainedState::new(true, 2)),
+        ];
+        let channel = Channel::<NoopRawMutex, EventData, 5>::new();
+        for event in &events {
+            assert!(channel.try_send(event.clone()).is_ok());
+        }
+
+        let mut subscriber = PowerPolicySubscriber::new(channel.dyn_receiver());
+        for event in events {
+            assert_eq!(poll_once(&mut subscriber), Poll::Ready(event));
+        }
+        assert_eq!(poll_once(&mut subscriber), Poll::Pending);
+    }
+
+    #[test]
+    fn subscriber_forwards_full_events_with_psu_references() {
+        type Psu = Mutex<NoopRawMutex, TestPsu>;
+        let first_psu = Psu::new(TestPsu::default());
+        let second_psu = Psu::new(TestPsu::default());
+        let channel = Channel::<NoopRawMutex, Event<'_, Psu>, 2>::new();
+        let capability = PowerCapability {
+            voltage_mv: 20_000,
+            current_ma: 3250,
+        }
+        .into();
+        let disconnect = DisconnectFlags {
+            reason: Some(DisconnectReason::Switching),
+        };
+        assert!(
+            channel
+                .try_send(Event::ConsumerConnected(&first_psu, capability))
+                .is_ok()
+        );
+        assert!(
+            channel
+                .try_send(Event::ConsumerDisconnected(&second_psu, disconnect))
+                .is_ok()
+        );
+
+        let mut subscriber = PowerPolicySubscriber::new(channel.dyn_receiver());
+        assert!(matches!(
+            poll_once(&mut subscriber),
+            Poll::Ready(Event::ConsumerConnected(psu, received))
+                if ptr::eq(psu, &first_psu) && received == capability
+        ));
+        assert!(matches!(
+            subscriber.try_next(),
+            Some(Event::ConsumerDisconnected(psu, received))
+                if ptr::eq(psu, &second_psu) && received == disconnect
+        ));
+        assert!(subscriber.try_next().is_none());
+    }
+
+    #[test]
+    fn subscriber_forwards_non_clone_events() {
+        struct NonCloneEvent(u8);
+
+        let channel = Channel::<NoopRawMutex, NonCloneEvent, 1>::new();
+        let mut subscriber = PowerPolicySubscriber::new(channel.receiver());
+        assert!(channel.try_send(NonCloneEvent(42)).is_ok());
+        assert!(matches!(poll_once(&mut subscriber), Poll::Ready(NonCloneEvent(42))));
+        assert!(subscriber.try_next().is_none());
+    }
+
+    #[test]
+    fn subscriber_forwards_nonblocking_receives() {
+        let channel = Channel::<NoopRawMutex, EventData, 1>::new();
+        let mut subscriber = PowerPolicySubscriber::new(channel.receiver());
+        assert_eq!(subscriber.try_next(), None);
+
+        let event = EventData::ConsumerDisconnected(DisconnectFlags::default());
+        assert!(channel.try_send(event.clone()).is_ok());
+        assert_eq!(subscriber.try_next(), Some(event));
+        assert_eq!(subscriber.try_next(), None);
+    }
+
+    #[test]
+    fn subscriber_preserves_events_after_cancelled_pending_wait() {
+        let channel = Channel::<NoopRawMutex, EventData, 1>::new();
+        let mut subscriber = PowerPolicySubscriber::new(channel.receiver());
+        assert_eq!(poll_once(&mut subscriber), Poll::Pending);
+
+        let event = EventData::ConsumerDisconnected(DisconnectFlags::default());
+        assert!(channel.try_send(event.clone()).is_ok());
+        assert_eq!(poll_once(&mut subscriber), Poll::Ready(event));
+        assert_eq!(subscriber.try_next(), None);
+    }
+
+    #[test]
+    fn subscriber_preserves_receiver_send_and_sync() {
+        struct EmptyReceiver;
+
+        impl Receiver<*const ()> for EmptyReceiver {
+            fn try_next(&mut self) -> Option<*const ()> {
+                None
+            }
+
+            fn wait_next(&mut self) -> impl Future<Output = *const ()> {
+                core::future::pending()
+            }
+        }
+
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<PowerPolicySubscriber<*const (), EmptyReceiver>>();
+    }
+
+    #[test]
+    fn subscriber_accepts_custom_receivers() {
+        struct CustomReceiver(Option<EventData>);
+
+        impl Receiver<EventData> for CustomReceiver {
+            fn try_next(&mut self) -> Option<EventData> {
+                self.0.take()
+            }
+
+            fn wait_next(&mut self) -> impl Future<Output = EventData> {
+                poll_fn(|_| match self.try_next() {
+                    Some(event) => Poll::Ready(event),
+                    None => Poll::Pending,
+                })
+            }
+        }
+
+        let event = EventData::ProviderDisconnected;
+        let mut subscriber = PowerPolicySubscriber::new(CustomReceiver(Some(event.clone())));
+        assert_eq!(poll_once(&mut subscriber), Poll::Ready(event));
+        assert_eq!(subscriber.try_next(), None);
+    }
+}

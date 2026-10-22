@@ -10,7 +10,7 @@ use embedded_services::{info, trace};
 
 mod acpi;
 pub mod event_receiver;
-#[cfg(feature = "mock")]
+#[cfg(any(feature = "mock", test))]
 pub mod mock;
 pub mod registration;
 pub mod routing;
