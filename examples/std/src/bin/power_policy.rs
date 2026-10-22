@@ -1,13 +1,18 @@
+use battery_service::{
+    BatteryService, DefaultPowerPolicyRouting, DeviceId, Event as BatteryEvent, FuelGauge as _, PowerPolicyRouting,
+    PowerPolicyUpdate,
+};
 use embassy_executor::{Executor, Spawner};
 use embassy_sync::{
     blocking_mutex::raw::NoopRawMutex,
     channel::{self, Channel},
     mutex::Mutex,
 };
-use embassy_time::{self as _, Timer};
+use embassy_time::{Duration, Ticker, Timer};
 use embedded_batteries_async::charger::{MilliAmps, MilliVolts};
-use embedded_services::{GlobalRawMutex, event::NoopSender, named::Named};
+use embedded_services::{GlobalRawMutex, named::Named, sync::Lockable};
 use log::*;
+use power_policy_interface::service::event::EventData as PowerPolicyEventData;
 use power_policy_interface::{
     capability::{ConsumerFlags, ConsumerPowerCapability, PowerCapability, ProviderPowerCapability},
     charger, psu,
@@ -21,8 +26,12 @@ use power_policy_service::{
 };
 use static_cell::StaticCell;
 
-type ServiceNotifier =
-    power_policy_interface::service::event::NonBlockingSenderNotifier<'static, DeviceType, NoopSender>;
+type ServiceEvent = power_policy_interface::service::event::Event<'static, DeviceType>;
+type ServiceNotifier = power_policy_interface::service::event::SenderNotifier<
+    'static,
+    DeviceType,
+    channel::DynamicSender<'static, ServiceEvent>,
+>;
 type ServiceType = Mutex<
     GlobalRawMutex,
     power_policy_service::service::Service<
@@ -126,7 +135,56 @@ impl Named for ExampleDevice<'_> {
     }
 }
 
-type DeviceType = Mutex<GlobalRawMutex, ExampleDevice<'static>>;
+struct DeviceType {
+    source_id: u8,
+    inner: Mutex<GlobalRawMutex, ExampleDevice<'static>>,
+}
+
+impl DeviceType {
+    fn new(source_id: u8, device: ExampleDevice<'static>) -> Self {
+        Self {
+            source_id,
+            inner: Mutex::new(device),
+        }
+    }
+}
+
+impl Lockable for DeviceType {
+    type Inner = ExampleDevice<'static>;
+
+    fn try_lock(&self) -> Option<impl core::ops::DerefMut<Target = Self::Inner>> {
+        Lockable::try_lock(&self.inner)
+    }
+
+    async fn lock(&self) -> impl core::ops::DerefMut<Target = Self::Inner> {
+        self.inner.lock().await
+    }
+}
+
+/// Routes consumer notifications one-to-one by PSU source ID.
+///
+/// Uses the default consumer-state interpretation and immutable source IDs to
+/// map PSU `0` to fuel gauge `0` and PSU `1` to fuel gauge `1`.
+/// Consumer events include unconstrained flags; aggregate events have no source ID.
+struct BatteryPowerRouting;
+
+impl PowerPolicyRouting for BatteryPowerRouting {
+    type Event = ServiceEvent;
+
+    fn route(&self, event: &Self::Event) -> impl Iterator<Item = (DeviceId, PowerPolicyUpdate)> + Clone {
+        use power_policy_interface::service::event::Event;
+
+        let data = PowerPolicyEventData::from(*event);
+        let update = DefaultPowerPolicyRouting.route(&data).next().map(|(_, update)| update);
+        match event {
+            Event::ConsumerConnected(psu, _) | Event::ConsumerDisconnected(psu, _) => {
+                update.map(|update| (DeviceId(psu.source_id), update))
+            }
+            _ => None,
+        }
+        .into_iter()
+    }
+}
 
 struct ExampleCharger<'a> {
     sender: channel::DynamicSender<'a, power_policy_interface::charger::event::EventData>,
@@ -228,20 +286,20 @@ async fn run(spawner: Spawner) {
         StaticCell::new();
     let device0_event_channel = DEVICE0_EVENT_CHANNEL.init(Channel::new());
     static DEVICE0: StaticCell<DeviceType> = StaticCell::new();
-    let device0 = DEVICE0.init(Mutex::new(ExampleDevice::new(
-        "Device 0",
-        device0_event_channel.dyn_sender(),
-    )));
+    let device0 = DEVICE0.init(DeviceType::new(
+        0,
+        ExampleDevice::new("Device 0", device0_event_channel.dyn_sender()),
+    ));
 
     info!("Creating device 1");
     static DEVICE1_EVENT_CHANNEL: StaticCell<Channel<NoopRawMutex, power_policy_interface::psu::event::EventData, 4>> =
         StaticCell::new();
     let device1_event_channel = DEVICE1_EVENT_CHANNEL.init(Channel::new());
     static DEVICE1: StaticCell<DeviceType> = StaticCell::new();
-    let device1 = DEVICE1.init(Mutex::new(ExampleDevice::new(
-        "Device 1",
-        device1_event_channel.dyn_sender(),
-    )));
+    let device1 = DEVICE1.init(DeviceType::new(
+        1,
+        ExampleDevice::new("Device 1", device1_event_channel.dyn_sender()),
+    ));
 
     info!("Creating charger 0");
     static CHARGER0_EVENT_CHANNEL: StaticCell<
@@ -251,9 +309,14 @@ async fn run(spawner: Spawner) {
     static CHARGER0: StaticCell<ChargerType> = StaticCell::new();
     let charger0 = CHARGER0.init(Mutex::new(ExampleCharger::new(charger0_event_channel.dyn_sender())));
 
+    static SERVICE_EVENT_CHANNEL: StaticCell<Channel<NoopRawMutex, ServiceEvent, 4>> = StaticCell::new();
+    let service_event_channel = SERVICE_EVENT_CHANNEL.init(Channel::new());
+    spawner.spawn(battery_task(service_event_channel.dyn_receiver()).expect("Failed to create battery task"));
+
+    let service_notifier = ServiceNotifier::new(service_event_channel.dyn_sender());
     let registration = ArrayRegistration {
         psus: [device0, device1],
-        service_notifiers: [NoopSender.into()],
+        service_notifiers: [service_notifier],
         chargers: [charger0],
     };
 
@@ -528,6 +591,56 @@ async fn run(spawner: Spawner) {
             .await;
     }
     Timer::after_millis(PER_CALL_DELAY_MS).await;
+}
+
+/// Polls fuel gauges and routes power-policy notifications in the same task.
+#[embassy_executor::task]
+async fn battery_task(events: channel::DynamicReceiver<'static, ServiceEvent>) {
+    let mut events = battery_service::EventReceiver::<_, ServiceEvent>::new(events);
+    let first = Mutex::<NoopRawMutex, _>::new(battery_service::mock::MockFuelGauge::new());
+    let second = Mutex::<NoopRawMutex, _>::new(battery_service::mock::MockFuelGauge::new_2s());
+    let battery = battery_service::Service::new(battery_service::ArrayRegistration {
+        fuel_gauges: [&first, &second],
+        routing: BatteryPowerRouting,
+    });
+    for &gauge in battery.fuel_gauges() {
+        battery_service::mock::init_state_machine(gauge)
+            .await
+            .expect("Failed to initialize fuel gauge");
+    }
+    let mut ticker = Ticker::every(Duration::from_secs(1));
+    loop {
+        let event = match events.wait_next_with_poll(ticker.next()).await {
+            BatteryEvent::Poll => {
+                for &gauge in battery.fuel_gauges() {
+                    if let Err(e) = gauge.lock().await.update_dynamic_data().await {
+                        error!("Fuel gauge polling error: {:?}", e);
+                    }
+                }
+                continue;
+            }
+            BatteryEvent::PowerPolicy(event) => event,
+        };
+        info!("battery event {:?}", PowerPolicyEventData::from(event));
+        battery
+            .process_power_policy_event(&event)
+            .await
+            .expect("Failed to route power-policy event to fuel gauges");
+        for id in [DeviceId(0), DeviceId(1)] {
+            let status = BatteryService::is_psu_in_use(&battery, id)
+                .await
+                .expect("Failed to read fuel-gauge power status");
+            let information = BatteryService::power_source_information(&battery, id)
+                .await
+                .expect("Failed to read fuel-gauge power information");
+            info!(
+                "Battery ACPI: gauge={}, external power online={}, available output={} mW (0xFFFFFFFF means unknown)",
+                id.0,
+                status.power_source == embedded_batteries_async::acpi::PowerSource::Online,
+                information.max_output_power,
+            );
+        }
+    }
 }
 
 #[embassy_executor::task]

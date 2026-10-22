@@ -47,7 +47,7 @@ pub enum StateKind {
 }
 
 /// Current state of the power device
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum PsuState {
     /// Device is attached, but is not currently providing or consuming power
@@ -57,6 +57,7 @@ pub enum PsuState {
     /// Device is attached and is currently consuming power
     ConnectedConsumer(ConsumerPowerCapability),
     /// No device attached
+    #[default]
     Detached,
 }
 

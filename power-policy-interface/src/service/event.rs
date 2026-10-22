@@ -1,7 +1,7 @@
 use core::{future::ready, marker::PhantomData};
 
 use embedded_services::{
-    event::{NonBlockingSender, Sender},
+    event::{NonBlockingSender, Receiver, Sender},
     sync::Lockable,
 };
 
@@ -44,6 +44,35 @@ where
             Event::ProviderConnected(_, capability) => EventData::ProviderConnected(capability),
             Event::Unconstrained(unconstrained) => EventData::Unconstrained(unconstrained),
         }
+    }
+}
+
+/// Receives power-policy notifications.
+///
+/// Wraps any [`Receiver`] and forwards its events unchanged.
+pub struct PowerPolicySubscriber<E, R: Receiver<E>> {
+    receiver: R,
+    // Track E without owning it or imposing its Send/Sync requirements.
+    _phantom: PhantomData<fn() -> E>,
+}
+
+impl<E, R: Receiver<E>> PowerPolicySubscriber<E, R> {
+    /// Wrap an event receiver.
+    pub fn new(receiver: R) -> Self {
+        Self {
+            receiver,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<E, R: Receiver<E>> Receiver<E> for PowerPolicySubscriber<E, R> {
+    fn try_next(&mut self) -> Option<E> {
+        self.receiver.try_next()
+    }
+
+    fn wait_next(&mut self) -> impl Future<Output = E> {
+        self.receiver.wait_next()
     }
 }
 

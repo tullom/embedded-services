@@ -81,6 +81,7 @@ name = "battery-service"
 version = "0.1.0"
 dependencies = [
  "battery-service-interface",
+ "embassy-futures",
  "embassy-time",
  "embedded-batteries-async",
  "embedded-services",
@@ -94,6 +95,7 @@ version = "0.1.0"
 dependencies = [
  "embedded-batteries-async",
  "log",
+ "power-policy-interface",
 ]
 
 [[package]]
