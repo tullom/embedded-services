@@ -119,11 +119,13 @@ dependencies = [
  "battery-service-interface",
  "defmt 0.3.100",
  "embassy-futures",
+ "embassy-sync",
  "embassy-time",
  "embedded-batteries-async",
  "embedded-services",
  "log",
  "power-policy-interface",
+ "power-policy-interface-test-mocks",
 ]
 
 [[package]]

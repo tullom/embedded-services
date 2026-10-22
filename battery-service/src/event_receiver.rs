@@ -77,3 +77,119 @@ impl<PowerReceiver: Receiver<E>, E> Receiver<E> for EventReceiver<PowerReceiver,
         self.power_policy_event_subscriber.wait_next()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::{
+        future::{Future, pending, ready},
+        pin::pin,
+        task::{Context, Waker},
+    };
+
+    use embassy_futures::block_on;
+    use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
+    use power_policy_interface::capability::{DisconnectFlags, PowerCapability};
+
+    use super::{Event, EventReceiver, PowerPolicyEventData, Receiver};
+
+    #[test]
+    fn combined_wait_polls_without_power_policy_notifications() {
+        let channel = Channel::<NoopRawMutex, PowerPolicyEventData, 1>::new();
+        let mut receiver = EventReceiver::new(channel.receiver());
+        assert_eq!(block_on(receiver.wait_next_with_poll(ready(()))), Event::Poll);
+        assert_eq!(receiver.try_next(), None);
+    }
+
+    #[test]
+    fn ready_poll_preserves_queued_notifications_in_order() {
+        let channel = Channel::<NoopRawMutex, PowerPolicyEventData, 2>::new();
+        let mut receiver = EventReceiver::new(channel.receiver());
+        let connected = PowerPolicyEventData::ConsumerConnected(
+            PowerCapability {
+                voltage_mv: 20_000,
+                current_ma: 3250,
+            }
+            .into(),
+        );
+        let disconnected = PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default());
+        assert!(channel.try_send(connected.clone()).is_ok());
+        assert!(channel.try_send(disconnected.clone()).is_ok());
+
+        assert_eq!(block_on(receiver.wait_next_with_poll(ready(()))), Event::Poll);
+        assert_eq!(
+            block_on(receiver.wait_next_with_poll(pending())),
+            Event::PowerPolicy(connected)
+        );
+        assert_eq!(
+            block_on(receiver.wait_next_with_poll(pending())),
+            Event::PowerPolicy(disconnected)
+        );
+        assert_eq!(receiver.try_next(), None);
+    }
+
+    #[test]
+    fn overdue_poll_does_not_starve_queued_notifications() {
+        let channel = Channel::<NoopRawMutex, PowerPolicyEventData, 2>::new();
+        let mut receiver = EventReceiver::new(channel.receiver());
+        let events = [
+            PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default()),
+            PowerPolicyEventData::ProviderDisconnected,
+        ];
+        for event in &events {
+            assert!(channel.try_send(event.clone()).is_ok());
+        }
+
+        for event in events {
+            assert_eq!(block_on(receiver.wait_next_with_poll(ready(()))), Event::Poll);
+            assert_eq!(
+                block_on(receiver.wait_next_with_poll(ready(()))),
+                Event::PowerPolicy(event)
+            );
+        }
+        assert_eq!(receiver.try_next(), None);
+    }
+
+    #[test]
+    fn combined_wait_preserves_notifications_after_cancellation() {
+        let channel = Channel::<NoopRawMutex, PowerPolicyEventData, 1>::new();
+        let mut receiver = EventReceiver::new(channel.receiver());
+        {
+            let mut wait = pin!(receiver.wait_next_with_poll(pending()));
+            assert!(wait.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+        }
+
+        let disconnected = PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default());
+        assert!(channel.try_send(disconnected.clone()).is_ok());
+        assert_eq!(
+            block_on(receiver.wait_next_with_poll(pending())),
+            Event::PowerPolicy(disconnected)
+        );
+        assert_eq!(block_on(receiver.wait_next_with_poll(ready(()))), Event::Poll);
+        assert_eq!(receiver.try_next(), None);
+    }
+
+    #[test]
+    fn receiver_preserves_events_after_cancelled_wait() {
+        let channel = Channel::<NoopRawMutex, PowerPolicyEventData, 1>::new();
+        let mut receiver = EventReceiver::new(channel.receiver());
+        {
+            let mut wait = pin!(receiver.wait_next());
+            assert!(wait.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+        }
+
+        let connected = PowerPolicyEventData::ConsumerConnected(
+            PowerCapability {
+                voltage_mv: 20_000,
+                current_ma: 3250,
+            }
+            .into(),
+        );
+        assert!(channel.try_send(connected.clone()).is_ok());
+        assert_eq!(block_on(receiver.wait_next()), connected);
+
+        let disconnected = PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default());
+        assert!(channel.try_send(disconnected.clone()).is_ok());
+        assert_eq!(receiver.try_next(), Some(disconnected));
+        assert_eq!(receiver.try_next(), None);
+    }
+}

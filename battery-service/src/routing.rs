@@ -62,3 +62,93 @@ pub struct DefaultPowerPolicyRouting;
 impl PowerPolicyRouting for DefaultPowerPolicyRouting {
     type Event = PowerPolicyEventData;
 }
+
+#[cfg(test)]
+mod tests {
+    use power_policy_interface::{
+        capability::{DisconnectFlags, PowerCapability},
+        service::UnconstrainedState,
+    };
+
+    use super::*;
+
+    #[test]
+    fn default_routing_connects_only_gauge_zero() {
+        let routing = DefaultPowerPolicyRouting;
+        let capability = PowerCapability {
+            voltage_mv: 20_000,
+            current_ma: 3250,
+        }
+        .into();
+        let event = PowerPolicyEventData::ConsumerConnected(capability);
+        let expected = (
+            DeviceId(0),
+            PowerPolicyUpdate::PsuState(PsuState::ConnectedConsumer(capability)),
+        );
+        let mut updates = routing.route(&event);
+        let cloned = updates.clone();
+        assert_eq!(updates.next(), Some(expected));
+        assert_eq!(updates.next(), None);
+        assert!(cloned.eq([expected]));
+    }
+
+    #[test]
+    fn default_routing_distinguishes_detachment_from_other_disconnects() {
+        let routing = DefaultPowerPolicyRouting;
+        for reason in [
+            None,
+            Some(DisconnectReason::Detached),
+            Some(DisconnectReason::Switching),
+            Some(DisconnectReason::AutoRenegotiation),
+            Some(DisconnectReason::ManualRenegotiation),
+            Some(DisconnectReason::RoleSwap),
+            Some(DisconnectReason::Reset),
+        ] {
+            let event = PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags { reason });
+            let expected = if reason == Some(DisconnectReason::Detached) {
+                PsuState::Detached
+            } else {
+                PsuState::Idle
+            };
+            assert!(
+                routing
+                    .route(&event)
+                    .eq([(DeviceId(0), PowerPolicyUpdate::PsuState(expected))])
+            );
+        }
+    }
+
+    #[test]
+    fn default_routing_ignores_provider_events() {
+        let routing = DefaultPowerPolicyRouting;
+        for event in [
+            PowerPolicyEventData::ProviderConnected(
+                PowerCapability {
+                    voltage_mv: 5000,
+                    current_ma: 1500,
+                }
+                .into(),
+            ),
+            PowerPolicyEventData::ProviderDisconnected,
+        ] {
+            assert!(routing.route(&event).next().is_none());
+        }
+    }
+
+    #[test]
+    fn default_routing_updates_unconstrained_override() {
+        let routing = DefaultPowerPolicyRouting;
+        for state in [
+            UnconstrainedState::new(true, 2),
+            UnconstrainedState::new(true, 0),
+            UnconstrainedState::new(false, 2),
+            UnconstrainedState::new(false, 0),
+        ] {
+            let event = PowerPolicyEventData::Unconstrained(state);
+            let expected = [(DeviceId(0), PowerPolicyUpdate::Unconstrained(state.unconstrained))];
+            let updates = routing.route(&event);
+            assert!(updates.clone().eq(expected));
+            assert!(updates.eq(expected));
+        }
+    }
+}

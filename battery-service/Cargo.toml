@@ -23,6 +23,10 @@ embedded-services.workspace = true
 log = { workspace = true, optional = true }
 power-policy-interface.workspace = true
 
+[dev-dependencies]
+embassy-sync.workspace = true
+power-policy-interface-test-mocks.workspace = true
+
 [features]
 default = []
 defmt = [
