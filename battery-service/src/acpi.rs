@@ -2,29 +2,18 @@
 
 use battery_service_interface::BatteryError;
 use battery_service_interface::fuel_gauge::{DynamicBatteryData, FuelGauge, StaticBatteryData};
-use embedded_batteries_async::acpi::{PowerSourceState, PowerUnit};
+use embedded_batteries_async::acpi::{PowerSource, PowerSourceState, PowerUnit};
 use embedded_batteries_async::smart_battery::CapacityModeValue;
 use embedded_services::sync::Lockable;
-use embedded_services::{info, trace};
+use embedded_services::{error, info, trace};
 
 use battery_service_interface::{
     BctReturnResult, BixFixedStrings, Bmd, Bpc, Bps, BstReturn, BtmReturnResult, DeviceId, PifFixedStrings, PsrReturn,
     STD_BIX_BATTERY_SIZE, STD_BIX_MODEL_SIZE, STD_BIX_OEM_SIZE, STD_BIX_SERIAL_SIZE, STD_PIF_MODEL_SIZE,
-    STD_PIF_OEM_SIZE, STD_PIF_SERIAL_SIZE, StaReturn,
+    STD_PIF_OEM_SIZE, STD_PIF_SERIAL_SIZE, StaReturn, UNLIMITED_POWER_MW,
 };
 
-use power_policy_interface::capability::PowerCapability;
-
-/// Cached power-supply state used when answering ACPI power-source queries.
-///
-/// Currently always the default; this is a placeholder for future power policy
-/// integration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct PsuState {
-    pub psu_connected: bool,
-    pub power_capability: Option<PowerCapability>,
-}
+use power_policy_interface::psu::PsuState;
 
 /// Extract the raw numeric value from a [`CapacityModeValue`], discarding the unit
 /// tag. The unit (mA/mAh vs centiWatt) is conveyed to ACPI separately via the BIX
@@ -176,32 +165,32 @@ pub(crate) fn compute_sta() -> embedded_batteries_async::acpi::StaReturn {
     embedded_batteries_async::acpi::StaReturn::all()
 }
 
-pub(crate) fn compute_psr(psu_state: &PsuState) -> embedded_batteries_async::acpi::PsrReturn {
-    // TODO: Refactor to check if battery if force discharged,
-    // which should give an offline result even when the PSU is attached.
-    embedded_batteries_async::acpi::PsrReturn {
-        power_source: if psu_state.psu_connected {
-            embedded_batteries_async::acpi::PowerSource::Online
+pub(crate) fn compute_psr(psu_state: PsuState, unconstrained: bool) -> PsrReturn {
+    PsrReturn {
+        power_source: if unconstrained || matches!(psu_state, PsuState::ConnectedConsumer(_)) {
+            PowerSource::Online
         } else {
-            embedded_batteries_async::acpi::PowerSource::Offline
+            PowerSource::Offline
         },
     }
 }
 
-pub(crate) fn compute_pif(psu_state: &PsuState) -> PifFixedStrings {
-    // TODO: Grab real values from power policy
-    let capability = psu_state.power_capability.unwrap_or(PowerCapability {
-        voltage_mv: 0,
-        current_ma: 0,
-    });
-
+pub(crate) fn compute_pif(psu_state: PsuState, unconstrained: bool) -> PifFixedStrings {
     PifFixedStrings {
         power_source_state: PowerSourceState::empty(),
-        max_output_power: capability.max_power_mw(),
-        max_input_power: capability.max_power_mw(),
-        model_number: [0u8; STD_PIF_MODEL_SIZE],
-        serial_number: [0u8; STD_PIF_SERIAL_SIZE],
-        oem_info: [0u8; STD_PIF_OEM_SIZE],
+        // Policy reports the available or negotiated output, which may differ from the adapter's nameplate rating.
+        max_output_power: if unconstrained {
+            UNLIMITED_POWER_MW
+        } else {
+            match psu_state {
+                PsuState::ConnectedConsumer(capability) => capability.capability.max_power_mw(),
+                _ => u32::MAX,
+            }
+        },
+        max_input_power: u32::MAX,
+        model_number: [0; STD_PIF_MODEL_SIZE],
+        serial_number: [0; STD_PIF_SERIAL_SIZE],
+        oem_info: [0; STD_PIF_OEM_SIZE],
     }
 }
 
@@ -212,21 +201,25 @@ impl<'hw, Reg: crate::registration::Registration<'hw>> crate::Service<'hw, Reg> 
     /// [`DeviceId`] into its registered fuel gauge with this helper, locks it, and delegates to the
     /// corresponding reference-based query method below, which holds the actual logic.
     pub(super) fn fuel_gauge(&self, device_id: DeviceId) -> Result<&'hw Reg::FuelGauge, BatteryError> {
-        self.registration
-            .get_fuel_gauge(device_id)
-            .ok_or(BatteryError::UnknownDeviceId)
+        self.registration.get_fuel_gauge(device_id).ok_or_else(|| {
+            error!("Unknown fuel gauge ID {:?}", device_id);
+            BatteryError::UnknownDeviceId
+        })
     }
 }
 
 /// Reference-based ACPI query API.
 ///
-/// Unlike the [`BatteryService`](battery_service_interface::BatteryService) trait
-/// methods (which identify a battery by [`DeviceId`] and look the fuel gauge up
-/// through the service's [`Registration`](crate::registration::Registration)),
-/// these methods take an exclusive reference to the fuel gauge directly. The
-/// exclusive borrow proves the caller has sole access to the fuel gauge's cached
-/// state for the duration of the query, replacing the registration lookup and
-/// runtime lock with a compile-time guarantee.
+/// Battery queries take an exclusive reference to the fuel gauge. The borrow
+/// guarantees at compile time that the caller has sole access to its cached
+/// state during the query. No registration lookup or runtime lock is needed.
+///
+/// The [`BatteryService`](battery_service_interface::BatteryService) trait
+/// methods use a [`DeviceId`] to look up the fuel gauge through the service's
+/// [`Registration`](crate::registration::Registration).
+///
+/// Power-source queries use the same reference-based API and read only the
+/// external PSU state cached in the fuel gauge.
 ///
 /// TODO: Use this over DeviceId based approach?
 impl<'hw, Reg: crate::registration::Registration<'hw>> crate::Service<'hw, Reg> {
@@ -363,19 +356,27 @@ impl<'hw, Reg: crate::registration::Registration<'hw>> crate::Service<'hw, Reg> 
     /// Queries whether the power supply unit is currently in use (i.e., providing power to the system). Corresponds to ACPI's _PSR method.
     pub fn is_psu_in_use(
         &self,
-        _fuel_gauge: &mut <Reg::FuelGauge as Lockable>::Inner,
+        fuel_gauge: &mut <Reg::FuelGauge as Lockable>::Inner,
     ) -> Result<PsrReturn, BatteryError> {
         trace!("Battery service: got PSR command!");
-        Ok(compute_psr(&PsuState::default()))
+        let state = fuel_gauge.state();
+        Ok(compute_psr(state.psu_state(), state.is_psu_unconstrained()))
     }
 
     /// Queries information about the battery's power source. Corresponds to ACPI's _PIF method.
+    ///
+    /// Reports [`UNLIMITED_POWER_MW`] for unconstrained power, otherwise the cached
+    /// consumer's negotiated wattage or `u32::MAX` without a consumer.
+    /// The negotiated value may be below the rated maximum. Input rating is always unknown.
+    /// Notifications do not include adapter identity or redundancy/shared-source
+    /// flags, so the strings are empty and those flags are clear.
     pub fn power_source_information(
         &self,
-        _fuel_gauge: &mut <Reg::FuelGauge as Lockable>::Inner,
+        fuel_gauge: &mut <Reg::FuelGauge as Lockable>::Inner,
     ) -> Result<PifFixedStrings, BatteryError> {
         trace!("Battery service: got PIF command!");
-        Ok(compute_pif(&PsuState::default()))
+        let state = fuel_gauge.state();
+        Ok(compute_pif(state.psu_state(), state.is_psu_unconstrained()))
     }
 
     /// Queries the battery's status. Corresponds to ACPI's _STA method.

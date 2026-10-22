@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 defmt = { workspace = true, optional = true }
 battery-service-interface.workspace = true
+embassy-futures.workspace = true
 embassy-time.workspace = true
 embedded-batteries-async.workspace = true
 embedded-services.workspace = true

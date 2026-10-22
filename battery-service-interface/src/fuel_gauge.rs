@@ -17,6 +17,7 @@ use embedded_batteries_async::{
         MilliAmpsSigned, Minutes, Percent,
     },
 };
+pub use power_policy_interface::psu::PsuState;
 
 /// Fuel gauge errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -381,9 +382,10 @@ pub enum InternalState {
 
 /// Fuel gauge state, owned by the driver (OEM) and managed via the `on_*` transition methods.
 ///
-/// This holds both the fuel gauge state machine state and the cached static and
-/// dynamic battery data. The battery service reads this state (via
-/// [`FuelGauge::state`]) when answering ACPI queries.
+/// This holds the fuel gauge's internal state, cached static and dynamic battery
+/// data, and PSU state from routed power-policy notifications. It keeps no PSU
+/// reference. The battery service reads this state through
+/// [`FuelGauge::state`] to answer ACPI queries.
 ///
 /// The cached data types are generic and default to the standard
 /// [`StaticBatteryMsgs`] / [`DynamicBatteryMsgs`]. OEMs may substitute custom
@@ -394,6 +396,8 @@ pub struct State<S: StaticBatteryData = StaticBatteryMsgs, D: DynamicBatteryData
     state: InternalState,
     static_cache: S,
     dynamic_cache: D,
+    psu_state: PsuState,
+    psu_unconstrained: bool,
 }
 
 impl<S: StaticBatteryData, D: DynamicBatteryData> State<S, D> {
@@ -420,6 +424,39 @@ impl<S: StaticBatteryData, D: DynamicBatteryData> State<S, D> {
     /// A mutable reference to the cached dynamic battery data.
     pub fn dynamic_cache_mut(&mut self) -> &mut D {
         &mut self.dynamic_cache
+    }
+
+    /// The cached state of this gauge's external power source.
+    ///
+    /// Defaults to [`PsuState::Detached`] until a state is reported.
+    /// [`PsuState::Idle`] means the source is attached but not supplying power.
+    /// Unconstrained power is tracked separately by [`Self::is_psu_unconstrained`].
+    pub fn psu_state(&self) -> PsuState {
+        self.psu_state
+    }
+
+    /// Update external power state from a routed notification.
+    ///
+    /// Refreshes the unconstrained flag from the consumer capability, or clears it
+    /// for other states.
+    /// Leaves the fuel gauge's presence and operational state unchanged.
+    pub fn set_psu_state(&mut self, state: PsuState) {
+        self.psu_state = state;
+        self.psu_unconstrained =
+            matches!(state, PsuState::ConnectedConsumer(capability) if capability.flags.unconstrained_power);
+    }
+
+    /// Whether cached external power is online with unlimited output.
+    pub fn is_psu_unconstrained(&self) -> bool {
+        self.psu_unconstrained
+    }
+
+    /// Set the unconstrained override without changing the cached PSU state.
+    ///
+    /// Clearing it restores the cached consumer's negotiated wattage, or offline
+    /// status if no consumer is connected.
+    pub fn set_psu_unconstrained(&mut self, unconstrained: bool) {
+        self.psu_unconstrained = unconstrained;
     }
 
     /// Returns `true` if the fuel gauge is present.
