@@ -630,14 +630,10 @@ async fn battery_task(events: channel::DynamicReceiver<'static, ServiceEvent>) {
             let status = BatteryService::is_psu_in_use(&battery, id)
                 .await
                 .expect("Failed to read fuel-gauge power status");
-            let information = BatteryService::power_source_information(&battery, id)
-                .await
-                .expect("Failed to read fuel-gauge power information");
             info!(
-                "Battery ACPI: gauge={}, external power online={}, available output={} mW (0xFFFFFFFF means unknown)",
+                "Battery ACPI: gauge={}, external power online={}",
                 id.0,
                 status.power_source == embedded_batteries_async::acpi::PowerSource::Online,
-                information.max_output_power,
             );
         }
     }

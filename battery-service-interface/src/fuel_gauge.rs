@@ -446,15 +446,16 @@ impl<S: StaticBatteryData, D: DynamicBatteryData> State<S, D> {
             matches!(state, PsuState::ConnectedConsumer(capability) if capability.flags.unconstrained_power);
     }
 
-    /// Whether cached external power is online with unlimited output.
+    /// Whether the cached external source is unconstrained, i.e. outlet-powered rather than
+    /// battery-powered. This says nothing about its wattage.
     pub fn is_psu_unconstrained(&self) -> bool {
         self.psu_unconstrained
     }
 
     /// Set the unconstrained override without changing the cached PSU state.
     ///
-    /// Clearing it restores the cached consumer's negotiated wattage, or offline
-    /// status if no consumer is connected.
+    /// While set, `_PSR` reports online. Clearing it restores the status implied by the
+    /// cached PSU state.
     pub fn set_psu_unconstrained(&mut self, unconstrained: bool) {
         self.psu_unconstrained = unconstrained;
     }

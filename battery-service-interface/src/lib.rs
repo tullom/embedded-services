@@ -23,11 +23,6 @@ pub const STD_PIF_SERIAL_SIZE: usize = 8;
 /// Standard Power Policy Service OEM Info String Size
 pub const STD_PIF_OEM_SIZE: usize = 8;
 
-/// Service-specific sentinel for unlimited output power (mW).
-///
-/// `0xFFFFFFFF` remains reserved for unavailable power.
-pub const UNLIMITED_POWER_MW: u32 = u32::MAX - 1;
-
 #[derive(PartialEq, Clone, Copy, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct BixFixedStrings {
@@ -82,7 +77,7 @@ pub struct PifFixedStrings {
     pub power_source_state: PowerSourceState,
     /// Maximum rated output power in milliwatts (mW).
     ///
-    /// [`UNLIMITED_POWER_MW`] indicates unconstrained output; `0xFFFFFFFF` means unavailable.
+    /// 0xFFFFFFFF indicates the value is unavailable.
     pub max_output_power: u32,
     /// Maximum rated input power in milliwatts (mW).
     ///
@@ -194,9 +189,9 @@ pub trait BatteryService {
 
     /// Queries information about the battery's power source. Corresponds to ACPI's _PIF method.
     ///
-    /// The query reads the cached external-power state of the fuel gauge selected by `power_source_id`.
-    /// Unconstrained output is [`UNLIMITED_POWER_MW`]; otherwise it is the cached consumer's
-    /// negotiated wattage, or unknown without a consumer. An unregistered ID returns an error.
+    /// Output and input ratings are unavailable (`0xFFFFFFFF`). ACPI defines them as the source's
+    /// rated maximums, but power-policy notifications carry only the negotiated contract.
+    /// An unregistered `power_source_id` returns an error.
     fn power_source_information(
         &self,
         power_source_id: DeviceId,

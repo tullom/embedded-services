@@ -10,7 +10,7 @@ use embedded_services::{error, info, trace};
 use battery_service_interface::{
     BctReturnResult, BixFixedStrings, Bmd, Bpc, Bps, BstReturn, BtmReturnResult, DeviceId, PifFixedStrings, PsrReturn,
     STD_BIX_BATTERY_SIZE, STD_BIX_MODEL_SIZE, STD_BIX_OEM_SIZE, STD_BIX_SERIAL_SIZE, STD_PIF_MODEL_SIZE,
-    STD_PIF_OEM_SIZE, STD_PIF_SERIAL_SIZE, StaReturn, UNLIMITED_POWER_MW,
+    STD_PIF_OEM_SIZE, STD_PIF_SERIAL_SIZE, StaReturn,
 };
 
 use power_policy_interface::psu::PsuState;
@@ -175,18 +175,12 @@ pub(crate) fn compute_psr(psu_state: PsuState, unconstrained: bool) -> PsrReturn
     }
 }
 
-pub(crate) fn compute_pif(psu_state: PsuState, unconstrained: bool) -> PifFixedStrings {
+pub(crate) fn compute_pif() -> PifFixedStrings {
     PifFixedStrings {
         power_source_state: PowerSourceState::empty(),
-        // Policy reports the available or negotiated output, which may differ from the adapter's nameplate rating.
-        max_output_power: if unconstrained {
-            UNLIMITED_POWER_MW
-        } else {
-            match psu_state {
-                PsuState::ConnectedConsumer(capability) => capability.capability.max_power_mw(),
-                _ => u32::MAX,
-            }
-        },
+        // `_PIF` reports rated maximums. Notifications carry only the negotiated contract, and
+        // unconstrained means outlet-powered rather than unlimited, so both ratings are unavailable.
+        max_output_power: u32::MAX,
         max_input_power: u32::MAX,
         model_number: [0; STD_PIF_MODEL_SIZE],
         serial_number: [0; STD_PIF_SERIAL_SIZE],
@@ -365,18 +359,17 @@ impl<'hw, Reg: crate::registration::Registration<'hw>> crate::Service<'hw, Reg> 
 
     /// Queries information about the battery's power source. Corresponds to ACPI's _PIF method.
     ///
-    /// Reports [`UNLIMITED_POWER_MW`] for unconstrained power, otherwise the cached
-    /// consumer's negotiated wattage or `u32::MAX` without a consumer.
-    /// The negotiated value may be below the rated maximum. Input rating is always unknown.
+    /// Reports output and input ratings as unavailable (`0xFFFFFFFF`). ACPI defines them as the
+    /// source's rated maximums, but notifications carry only the negotiated contract.
     /// Notifications do not include adapter identity or redundancy/shared-source
     /// flags, so the strings are empty and those flags are clear.
+    /// TODO: Investigate how we can add more detailed power source information.
     pub fn power_source_information(
         &self,
-        fuel_gauge: &mut <Reg::FuelGauge as Lockable>::Inner,
+        _fuel_gauge: &mut <Reg::FuelGauge as Lockable>::Inner,
     ) -> Result<PifFixedStrings, BatteryError> {
         trace!("Battery service: got PIF command!");
-        let state = fuel_gauge.state();
-        Ok(compute_pif(state.psu_state(), state.is_psu_unconstrained()))
+        Ok(compute_pif())
     }
 
     /// Queries the battery's status. Corresponds to ACPI's _STA method.
@@ -474,28 +467,50 @@ mod tests {
         }
     }
 
+    /// Expected external-power cache of a fuel gauge.
+    #[derive(Clone, Copy, Debug)]
+    enum Expected {
+        /// No consumer contract and no unconstrained flag.
+        Offline,
+        /// A consumer contract of this many mW, without the unconstrained flag.
+        Contract(u32),
+        /// The unconstrained flag, with the cached consumer contract in mW, if any.
+        Unconstrained(Option<u32>),
+    }
+
     async fn assert_power_source<'hw, Reg: Registration<'hw>>(
         service: &Service<'hw, Reg>,
         id: DeviceId,
-        power_mw: Option<u32>,
+        expected: Expected,
     ) {
+        let (online, contract_mw, unconstrained) = match expected {
+            Expected::Offline => (false, None, false),
+            Expected::Contract(mw) => (true, Some(mw), false),
+            Expected::Unconstrained(contract_mw) => (true, contract_mw, true),
+        };
         let status = BatteryService::is_psu_in_use(service, id).await.unwrap();
         assert!(
             status.power_source
-                == if power_mw.is_some() {
+                == if online {
                     PowerSource::Online
                 } else {
                     PowerSource::Offline
                 }
         );
         let information = BatteryService::power_source_information(service, id).await.unwrap();
-        assert_eq!(information.max_output_power, power_mw.unwrap_or(u32::MAX));
+        assert_eq!(information.max_output_power, u32::MAX);
         assert_eq!(information.max_input_power, u32::MAX);
         assert!(information.power_source_state.is_empty());
         assert_eq!(information.model_number, [0; STD_PIF_MODEL_SIZE]);
         assert_eq!(information.serial_number, [0; STD_PIF_SERIAL_SIZE]);
         assert_eq!(information.oem_info, [0; STD_PIF_OEM_SIZE]);
         let mut gauge = service.get_fuel_gauge(id).unwrap().lock().await;
+        let cached_mw = match gauge.state().psu_state() {
+            PsuState::ConnectedConsumer(capability) => Some(capability.capability.max_power_mw()),
+            _ => None,
+        };
+        assert_eq!(cached_mw, contract_mw);
+        assert_eq!(gauge.state().is_psu_unconstrained(), unconstrained);
         assert!(service.is_psu_in_use(&mut *gauge).unwrap().power_source == status.power_source);
         assert!(service.power_source_information(&mut *gauge).unwrap() == information);
     }
@@ -518,7 +533,7 @@ mod tests {
                     .await
                     .unwrap()
                     .max_output_power,
-                65_000
+                u32::MAX
             );
         }
 
@@ -570,8 +585,8 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                assert_power_source(&service, DeviceId(0), Some(capability.max_power_mw())).await;
-                assert_power_source(&service, DeviceId(1), None).await;
+                assert_power_source(&service, DeviceId(0), Expected::Contract(capability.max_power_mw())).await;
+                assert_power_source(&service, DeviceId(1), Expected::Offline).await;
 
                 service
                     .process_power_policy_event(&SourceEvent {
@@ -580,8 +595,8 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                assert_power_source(&service, DeviceId(0), None).await;
-                assert_power_source(&service, DeviceId(1), None).await;
+                assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+                assert_power_source(&service, DeviceId(1), Expected::Offline).await;
             }
         });
     }
@@ -597,7 +612,7 @@ mod tests {
             });
             assert!(!gauge.lock().await.state().is_present());
             assert_eq!(gauge.lock().await.state().psu_state(), PsuState::Detached);
-            assert_power_source(&service, DeviceId(0), None).await;
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
 
             for (capability, expected_mw) in [
                 (
@@ -637,8 +652,8 @@ mod tests {
                     gauge.lock().await.state().psu_state(),
                     PsuState::ConnectedConsumer(capability.into())
                 );
-                assert_power_source(&service, DeviceId(0), Some(expected_mw)).await;
-                assert_power_source(&service, DeviceId(1), None).await;
+                assert_power_source(&service, DeviceId(0), Expected::Contract(expected_mw)).await;
+                assert_power_source(&service, DeviceId(1), Expected::Offline).await;
             }
 
             for reason in [
@@ -669,8 +684,8 @@ mod tests {
                 for _ in 0..2 {
                     service.process_power_policy_event(&event).await.unwrap();
                     assert_eq!(gauge.lock().await.state().psu_state(), expected_state);
-                    assert_power_source(&service, DeviceId(0), None).await;
-                    assert_power_source(&service, DeviceId(1), None).await;
+                    assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+                    assert_power_source(&service, DeviceId(1), Expected::Offline).await;
                     assert_eq!(unrelated.lock().await.state().psu_state(), PsuState::Detached);
                 }
             }
@@ -684,12 +699,13 @@ mod tests {
                 voltage_mv: 20_000,
                 current_ma: 3250,
             };
-            for (psu_state, restored_power) in [
+            for (psu_state, contract_mw) in [
                 (PsuState::Detached, None),
                 (PsuState::Idle, None),
                 (PsuState::ConnectedProvider(capability.into()), None),
                 (PsuState::ConnectedConsumer(capability.into()), Some(65_000)),
             ] {
+                let restored = contract_mw.map_or(Expected::Offline, Expected::Contract);
                 let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
                 let unrelated = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
                 gauge.lock().await.state_mut().set_psu_state(psu_state);
@@ -697,7 +713,7 @@ mod tests {
                     fuel_gauges: [&gauge, &unrelated],
                     routing: DefaultPowerPolicyRouting,
                 });
-                assert_power_source(&service, DeviceId(0), restored_power).await;
+                assert_power_source(&service, DeviceId(0), restored).await;
 
                 for notification in [
                     UnconstrainedState::new(true, 1),
@@ -720,13 +736,13 @@ mod tests {
                         &service,
                         DeviceId(0),
                         if notification.unconstrained {
-                            Some(0xffff_fffe)
+                            Expected::Unconstrained(contract_mw)
                         } else {
-                            restored_power
+                            restored
                         },
                     )
                     .await;
-                    assert_power_source(&service, DeviceId(1), None).await;
+                    assert_power_source(&service, DeviceId(1), Expected::Offline).await;
                 }
             }
         });
@@ -755,43 +771,75 @@ mod tests {
             for (event, expected_power) in [
                 (
                     PowerPolicyEventData::Unconstrained(UnconstrainedState::new(true, 1)),
-                    Some(0xffff_fffe),
+                    Expected::Unconstrained(None),
                 ),
-                (PowerPolicyEventData::ConsumerConnected(constrained), Some(65_000)),
+                (
+                    PowerPolicyEventData::ConsumerConnected(constrained),
+                    Expected::Contract(65_000),
+                ),
                 (
                     PowerPolicyEventData::ConsumerConnected(unconstrained),
-                    Some(0xffff_fffe),
+                    Expected::Unconstrained(Some(65_000)),
                 ),
                 (
                     PowerPolicyEventData::Unconstrained(UnconstrainedState::new(false, 1)),
-                    Some(65_000),
+                    Expected::Contract(65_000),
                 ),
                 (
                     PowerPolicyEventData::ConsumerConnected(unconstrained),
-                    Some(0xffff_fffe),
+                    Expected::Unconstrained(Some(65_000)),
                 ),
                 (
                     PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default()),
-                    None,
+                    Expected::Offline,
                 ),
                 (
                     PowerPolicyEventData::Unconstrained(UnconstrainedState::new(true, 1)),
-                    Some(0xffff_fffe),
+                    Expected::Unconstrained(None),
                 ),
                 (
                     PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags {
                         reason: Some(DisconnectReason::Detached),
                     }),
-                    None,
+                    Expected::Offline,
                 ),
             ] {
                 service.process_power_policy_event(&event).await.unwrap();
                 assert_power_source(&service, DeviceId(0), expected_power).await;
-                assert_eq!(
-                    gauge.lock().await.state().is_psu_unconstrained(),
-                    expected_power == Some(0xffff_fffe)
-                );
             }
+        });
+    }
+
+    #[test]
+    fn outlet_powered_consumer_reports_unavailable_ratings() {
+        block_on(async {
+            let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&gauge],
+                routing: DefaultPowerPolicyRouting,
+            });
+            // A 65 W contract from an outlet-powered adapter is neither unlimited nor the adapter's rating.
+            let outlet_powered = ConsumerPowerCapability {
+                capability: PowerCapability {
+                    voltage_mv: 20_000,
+                    current_ma: 3250,
+                },
+                flags: ConsumerFlags {
+                    unconstrained_power: true,
+                    ..Default::default()
+                },
+            };
+            service
+                .process_power_policy_event(&PowerPolicyEventData::ConsumerConnected(outlet_powered))
+                .await
+                .unwrap();
+            let status = BatteryService::is_psu_in_use(&service, DeviceId(0)).await.unwrap();
+            assert!(status.power_source == PowerSource::Online);
+            let information = BatteryService::power_source_information(&service, DeviceId(0))
+                .await
+                .unwrap();
+            assert_eq!(information.max_output_power, u32::MAX);
+            assert_eq!(information.max_input_power, u32::MAX);
         });
     }
 
@@ -814,7 +862,7 @@ mod tests {
                 ),
             ] {
                 gauge.lock().await.state_mut().set_psu_state(state);
-                assert_power_source(&service, DeviceId(0), None).await;
+                assert_power_source(&service, DeviceId(0), Expected::Offline).await;
                 assert_eq!(gauge.lock().await.state().psu_state(), state);
             }
         });
@@ -854,8 +902,8 @@ mod tests {
                     .await
                     .unwrap();
             }
-            assert_power_source(&service, DeviceId(0), Some(7500)).await;
-            assert_power_source(&service, DeviceId(1), Some(65_000)).await;
+            assert_power_source(&service, DeviceId(0), Expected::Contract(7500)).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(65_000)).await;
 
             for unconstrained in [true, false] {
                 service
@@ -868,10 +916,14 @@ mod tests {
                 assert_power_source(
                     &service,
                     DeviceId(0),
-                    Some(if unconstrained { 0xffff_fffe } else { 7500 }),
+                    if unconstrained {
+                        Expected::Unconstrained(Some(7500))
+                    } else {
+                        Expected::Contract(7500)
+                    },
                 )
                 .await;
-                assert_power_source(&service, DeviceId(1), Some(65_000)).await;
+                assert_power_source(&service, DeviceId(1), Expected::Contract(65_000)).await;
             }
 
             service
@@ -881,8 +933,8 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            assert_power_source(&service, DeviceId(0), None).await;
-            assert_power_source(&service, DeviceId(1), Some(65_000)).await;
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(65_000)).await;
             service
                 .process_power_policy_event(&SourceEvent {
                     source: DeviceId(1),
@@ -896,8 +948,8 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            assert_power_source(&service, DeviceId(0), None).await;
-            assert_power_source(&service, DeviceId(1), Some(100_000)).await;
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(100_000)).await;
 
             for (id, voltage) in [(DeviceId(0), 11_100), (DeviceId(1), 7400)] {
                 assert_eq!(
@@ -929,9 +981,12 @@ mod tests {
                 .await
                 .unwrap();
             for id in [DeviceId(0), DeviceId(1)] {
-                assert_power_source(&service, id, Some(65_000)).await;
+                assert_power_source(&service, id, Expected::Contract(65_000)).await;
             }
-            for (unconstrained, expected_power) in [(true, 0xffff_fffe), (false, 65_000)] {
+            for (unconstrained, expected_power) in [
+                (true, Expected::Unconstrained(Some(65_000))),
+                (false, Expected::Contract(65_000)),
+            ] {
                 service
                     .process_power_policy_event(&PowerPolicyEventData::Unconstrained(UnconstrainedState::new(
                         unconstrained,
@@ -940,7 +995,7 @@ mod tests {
                     .await
                     .unwrap();
                 for id in [DeviceId(0), DeviceId(1)] {
-                    assert_power_source(&service, id, Some(expected_power)).await;
+                    assert_power_source(&service, id, expected_power).await;
                 }
             }
             service
@@ -948,7 +1003,7 @@ mod tests {
                 .await
                 .unwrap();
             for id in [DeviceId(0), DeviceId(1)] {
-                assert_power_source(&service, id, None).await;
+                assert_power_source(&service, id, Expected::Offline).await;
             }
         });
     }
@@ -999,8 +1054,8 @@ mod tests {
                         expected
                     );
                 }
-                assert_power_source(&service, DeviceId(0), None).await;
-                assert_power_source(&service, DeviceId(1), Some(65_000)).await;
+                assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+                assert_power_source(&service, DeviceId(1), Expected::Contract(65_000)).await;
             }
         });
     }
@@ -1014,8 +1069,8 @@ mod tests {
                 fuel_gauges: [&first, &second],
                 routing: SourceRouting,
             });
-            assert_power_source(&service, DeviceId(0), None).await;
-            assert_power_source(&service, DeviceId(1), None).await;
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Offline).await;
             service
                 .process_power_policy_event(&SourceEvent {
                     source: DeviceId(1),
@@ -1029,8 +1084,8 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            assert_power_source(&service, DeviceId(0), None).await;
-            assert_power_source(&service, DeviceId(1), Some(7500)).await;
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(7500)).await;
 
             service
                 .process_power_policy_event(&SourceEvent {
@@ -1039,8 +1094,8 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            assert_power_source(&service, DeviceId(0), None).await;
-            assert_power_source(&service, DeviceId(1), Some(7500)).await;
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(7500)).await;
         });
     }
 
@@ -1099,15 +1154,15 @@ mod tests {
                         }
                         .into(),
                     ),
-                    65_000,
+                    Expected::Contract(65_000),
                 ),
                 (
                     PowerPolicyEventData::Unconstrained(UnconstrainedState::new(true, 1)),
-                    0xffff_fffe,
+                    Expected::Unconstrained(Some(65_000)),
                 ),
                 (
                     PowerPolicyEventData::Unconstrained(UnconstrainedState::new(false, 0)),
-                    65_000,
+                    Expected::Contract(65_000),
                 ),
             ] {
                 let second_guard = second.lock().await;
@@ -1119,12 +1174,12 @@ mod tests {
                             .poll(&mut Context::from_waker(Waker::noop()))
                             .is_pending()
                     );
-                    assert_power_source(&service, DeviceId(0), Some(expected_power)).await;
+                    assert_power_source(&service, DeviceId(0), expected_power).await;
                 }
                 drop(second_guard);
                 service.process_power_policy_event(&event).await.unwrap();
                 for id in [DeviceId(0), DeviceId(1)] {
-                    assert_power_source(&service, id, Some(expected_power)).await;
+                    assert_power_source(&service, id, expected_power).await;
                 }
             }
         });
@@ -1182,7 +1237,7 @@ mod tests {
                 gauge.lock().await.state().psu_state(),
                 PsuState::ConnectedConsumer(capability)
             );
-            assert_power_source(&service, DeviceId(0), Some(65_000)).await;
+            assert_power_source(&service, DeviceId(0), Expected::Contract(65_000)).await;
             send.await.unwrap();
             let disconnected = event_receiver.wait_next_with_poll(pending()).await;
             assert_eq!(
@@ -1193,7 +1248,7 @@ mod tests {
                 service.process_power_policy_event(&event).await.unwrap();
             }
             assert_eq!(gauge.lock().await.state().psu_state(), PsuState::Idle);
-            assert_power_source(&service, DeviceId(0), None).await;
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
             assert!(psu.try_lock().is_err());
             assert!(event_receiver.try_next().is_none());
         });
@@ -1233,7 +1288,7 @@ mod tests {
                     service.process_power_policy_event(&event).await,
                     Err(BatteryError::UnknownDeviceId)
                 ));
-                assert_power_source(&service, DeviceId(0), Some(7500)).await;
+                assert_power_source(&service, DeviceId(0), Expected::Contract(7500)).await;
             }
         });
     }
@@ -1271,7 +1326,11 @@ mod tests {
                 assert_power_source(
                     &service,
                     DeviceId(0),
-                    Some(if unconstrained { 65_000 } else { 0xffff_fffe }),
+                    if unconstrained {
+                        Expected::Contract(65_000)
+                    } else {
+                        Expected::Unconstrained(Some(65_000))
+                    },
                 )
                 .await;
             }
@@ -1317,7 +1376,11 @@ mod tests {
                     assert_power_source(
                         &service,
                         DeviceId(0),
-                        matches!(state, PsuState::ConnectedConsumer(_)).then_some(0xffff_fffe),
+                        if matches!(state, PsuState::ConnectedConsumer(_)) {
+                            Expected::Unconstrained(Some(7500))
+                        } else {
+                            Expected::Offline
+                        },
                     )
                     .await;
                 }

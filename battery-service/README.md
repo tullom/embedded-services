@@ -13,9 +13,9 @@ It distinguishes an attached but idle source from an active consumer or a
 detached source. PSU state is kept per gauge, with no service-wide copy.
 Fuel gauges and ACPI queries do not hold PSU references or acquire PSU locks.
 Fuel-gauge drivers need no extra associated type. Without power-policy
-integration, the cache remains offline with unknown output capability.
+integration, the cache remains offline.
 
-`_PSR` and `_PIF` use the same `DeviceId` as the fuel gauge and read its cache.
+`_PSR` and `_PIF` use the same `DeviceId` as the fuel gauge; `_PSR` reads its cache.
 Different gauges can track independent sources, share a source, or receive no
 power updates. Reference-based queries are synchronous, like the battery queries:
 
@@ -32,13 +32,12 @@ let status = service.is_psu_in_use(&mut *gauge)?;
   cached PSU state. Consumer events refresh it from the capability flags;
   disconnects clear it.
 - `_PSR` reports online for `ConnectedConsumer` or unconstrained power.
-- `_PIF` reports unlimited output as `0xFFFFFFFE`, a service-specific convention.
-  Clearing unconstrained restores the cached consumer's negotiated output in mW,
-  which may be below the adapter's rated maximum, or offline status if disconnected.
-- Without a consumer or unconstrained override, output power is unknown
-  (`0xFFFFFFFF`). Input rating is always unknown. Unassociated or not-yet-reported
-  gauges start offline with unknown output. A consumer disconnect clears the
-  previous negotiated capability.
+- `_PIF` reports output and input ratings as unavailable (`0xFFFFFFFF`). ACPI
+  defines them as the source's rated maximums, but notifications carry only the
+  negotiated contract, which can be lower and can change while the same source
+  stays attached. Unconstrained means outlet-powered, not unlimited wattage.
+- Unassociated or not-yet-reported gauges start offline. A consumer disconnect
+  clears the previous negotiated capability.
 - Notifications do not provide identity or redundancy/shared-source information,
   so identity strings are empty and those flags are clear.
 - Unregistered IDs return `UnknownDeviceId`, including ID `0` when no gauges are
