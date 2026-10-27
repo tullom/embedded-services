@@ -12,10 +12,15 @@ ignored = ["log"]
 defmt = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
 embedded-batteries-async.workspace = true
+power-policy-interface.workspace = true
 
 [lints]
 workspace = true
 
 [features]
-defmt = ["dep:defmt", "embedded-batteries-async/defmt"]
-log = ["dep:log"]
+defmt = [
+    "dep:defmt",
+    "embedded-batteries-async/defmt",
+    "power-policy-interface/defmt",
+]
+log = ["dep:log", "power-policy-interface/log"]

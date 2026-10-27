@@ -18,7 +18,7 @@
 
 use battery_service as bs;
 use bq40z50_rx::{BQ40Z50Error, Bq40z50R5};
-use bs::FuelGauge as _;
+use bs::{DefaultPowerPolicyRouting, FuelGauge as _};
 use embassy_sync::mutex::Mutex;
 use embedded_batteries_async::smart_battery::{BatteryModeFields, SmartBattery};
 use embedded_services::GlobalRawMutex;
@@ -164,8 +164,9 @@ impl bs::FuelGauge for Battery {
 /// The fuel gauge, wrapped in a mutex so it can be shared between the OEM driving
 /// code and the battery service.
 type FuelGauge = Mutex<GlobalRawMutex, Battery>;
+
 /// The registration: a single fuel gauge, which becomes battery `0`.
-type Reg<'hw> = bs::ArrayRegistration<'hw, FuelGauge, 1>;
+type Reg<'hw> = bs::ArrayRegistration<'hw, FuelGauge, 1, DefaultPowerPolicyRouting>;
 
 async fn init_state_machine(fuel_gauge: &FuelGauge) -> Result<(), BatteryError> {
     let mut fg = fuel_gauge.lock().await;
@@ -270,6 +271,7 @@ async fn main() {
 
     let battery_service = bs::Service::new(bs::ArrayRegistration {
         fuel_gauges: [&fuel_gauge],
+        routing: DefaultPowerPolicyRouting,
     });
 
     run_app(battery_service).await;

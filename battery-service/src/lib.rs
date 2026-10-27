@@ -5,21 +5,26 @@ use battery_service_interface::{
     BtmReturnResult, Btp, PifFixedStrings, PsrReturn, StaReturn,
 };
 use core::marker::PhantomData;
-use embedded_services::info;
 use embedded_services::sync::Lockable;
+use embedded_services::{info, trace};
 
 mod acpi;
-#[cfg(feature = "mock")]
+pub mod event_receiver;
+#[cfg(any(feature = "mock", test))]
 pub mod mock;
 pub mod registration;
+pub mod routing;
 
+pub use event_receiver::{Event, EventReceiver};
+pub use power_policy_interface::service::event::EventData as PowerPolicyEventData;
 pub use registration::{ArrayRegistration, Registration};
+pub use routing::{DefaultPowerPolicyRouting, PowerPolicyRouting, PowerPolicyUpdate};
 
 // Re-export the fuel gauge interface so that OEM drivers and integrators can
 // implement and use the battery service without depending on the interface crate directly.
 pub use battery_service_interface::fuel_gauge::{
     DynamicBatteryData, DynamicBatteryMsgs, FuelGauge, FuelGaugeError, InternalState, OperationalSubstate,
-    PresentSubstate, State, StaticBatteryData, StaticBatteryMsgs,
+    PresentSubstate, PsuState, State, StaticBatteryData, StaticBatteryMsgs,
 };
 pub use battery_service_interface::{BatteryService, DeviceId};
 
@@ -29,6 +34,8 @@ pub use battery_service_interface::{BatteryService, DeviceId};
 /// ACPI battery queries (via the [`BatteryService`] trait) by reading each
 /// registered fuel gauge's cached state. The OEM drives each registered fuel
 /// gauge directly through the [`FuelGauge`] trait methods.
+///
+/// Each fuel gauge caches its external [`PsuState`] and unconstrained override in [`State`].
 pub struct Service<'hw, Reg: Registration<'hw>> {
     registration: Reg,
     _phantom: PhantomData<&'hw ()>,
@@ -42,6 +49,45 @@ impl<'hw, Reg: Registration<'hw>> Service<'hw, Reg> {
             registration,
             _phantom: PhantomData,
         }
+    }
+
+    /// Apply a notification through the registration's router.
+    ///
+    /// [`PowerPolicyRouting::route`] selects each fuel gauge's cache updates.
+    /// The service ignores empty routes. For other
+    /// routes, it validates all target IDs before changing any cache, then
+    /// applies the updates without locking or retaining a PSU.
+    ///
+    /// Set up reliable, ordered event delivery before power policy starts. Await
+    /// this handler outside any selection that could cancel it. Updates to
+    /// multiple gauges take one lock at a time and are not atomic. Keep the
+    /// event until the handler finishes. If processing is cancelled, retry the
+    /// event idempotently before processing newer events.
+    pub async fn process_power_policy_event(
+        &self,
+        event: &<Reg::Routing as PowerPolicyRouting>::Event,
+    ) -> Result<(), BatteryError> {
+        let updates = self.registration.routing().route(event);
+        if updates.clone().next().is_none() {
+            trace!("Battery service: no fuel gauge updates for power-policy event");
+            return Ok(());
+        }
+        for (id, _) in updates.clone() {
+            self.fuel_gauge(id)?;
+        }
+        for (id, update) in updates {
+            {
+                let mut gauge = self.fuel_gauge(id)?.lock().await;
+                match update {
+                    PowerPolicyUpdate::PsuState(state) => gauge.state_mut().set_psu_state(state),
+                    PowerPolicyUpdate::Unconstrained(unconstrained) => {
+                        gauge.state_mut().set_psu_unconstrained(unconstrained);
+                    }
+                }
+            }
+            info!("Battery service: fuel gauge {:?} external power: {:?}", id, update);
+        }
+        Ok(())
     }
 
     /// Returns the registered fuel gauges.

@@ -16,11 +16,16 @@ workspace = true
 [dependencies]
 defmt = { workspace = true, optional = true }
 battery-service-interface.workspace = true
+embassy-futures.workspace = true
 embassy-time.workspace = true
 embedded-batteries-async.workspace = true
 embedded-services.workspace = true
 log = { workspace = true, optional = true }
 power-policy-interface.workspace = true
+
+[dev-dependencies]
+embassy-sync.workspace = true
+power-policy-interface-test-mocks.workspace = true
 
 [features]
 default = []

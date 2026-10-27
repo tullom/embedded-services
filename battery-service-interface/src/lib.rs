@@ -96,6 +96,7 @@ pub struct PifFixedStrings {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct DeviceId(pub u8);
 
+/// Host-facing battery operations.
 pub trait BatteryService {
     /// Queries the estimated time remaining until the battery reaches the specified charge level. Corresponds to ACPI's _BCT method
     fn battery_charge_time(
@@ -177,12 +178,20 @@ pub trait BatteryService {
     ) -> impl core::future::Future<Output = Result<(), BatteryError>>;
 
     /// Queries whether the power supply unit is currently in use (i.e., providing power to the system). Corresponds to ACPI's _PSR method.
+    ///
+    /// The query reads the cached external-power state of the fuel gauge selected by `power_source_id`.
+    /// A cached `ConnectedConsumer` state or unconstrained-power override reports online.
+    /// Other sources report offline. An unregistered ID returns an error.
     fn is_psu_in_use(
         &self,
         power_source_id: DeviceId,
     ) -> impl core::future::Future<Output = Result<PsrReturn, BatteryError>>;
 
     /// Queries information about the battery's power source. Corresponds to ACPI's _PIF method.
+    ///
+    /// Output and input ratings are unavailable (`0xFFFFFFFF`). ACPI defines them as the source's
+    /// rated maximums, but power-policy notifications carry only the negotiated contract.
+    /// An unregistered `power_source_id` returns an error.
     fn power_source_information(
         &self,
         power_source_id: DeviceId,
@@ -193,6 +202,120 @@ pub trait BatteryService {
         &self,
         battery_id: DeviceId,
     ) -> impl core::future::Future<Output = Result<StaReturn, BatteryError>>;
+}
+
+impl<T: BatteryService + ?Sized> BatteryService for &T {
+    fn battery_charge_time(
+        &self,
+        battery_id: DeviceId,
+        charge_level: Bct,
+    ) -> impl core::future::Future<Output = Result<BctReturnResult, BatteryError>> {
+        T::battery_charge_time(*self, battery_id, charge_level)
+    }
+
+    fn battery_info(
+        &self,
+        battery_id: DeviceId,
+    ) -> impl core::future::Future<Output = Result<BixFixedStrings, BatteryError>> {
+        T::battery_info(*self, battery_id)
+    }
+
+    fn set_battery_measurement_averaging_interval(
+        &self,
+        battery_id: DeviceId,
+        bma: Bma,
+    ) -> impl core::future::Future<Output = Result<(), BatteryError>> {
+        T::set_battery_measurement_averaging_interval(*self, battery_id, bma)
+    }
+
+    fn battery_maintenance_control(
+        &self,
+        battery_id: DeviceId,
+        bmc: Bmc,
+    ) -> impl core::future::Future<Output = Result<(), BatteryError>> {
+        T::battery_maintenance_control(*self, battery_id, bmc)
+    }
+
+    fn battery_maintenance_data(
+        &self,
+        battery_id: DeviceId,
+    ) -> impl core::future::Future<Output = Result<Bmd, BatteryError>> {
+        T::battery_maintenance_data(*self, battery_id)
+    }
+
+    fn set_battery_measurement_sampling_time(
+        &self,
+        battery_id: DeviceId,
+        battery_measurement_sampling: Bms,
+    ) -> impl core::future::Future<Output = Result<(), BatteryError>> {
+        T::set_battery_measurement_sampling_time(*self, battery_id, battery_measurement_sampling)
+    }
+
+    fn battery_power_characteristics(
+        &self,
+        battery_id: DeviceId,
+    ) -> impl core::future::Future<Output = Result<Bpc, BatteryError>> {
+        T::battery_power_characteristics(*self, battery_id)
+    }
+
+    fn battery_power_state(
+        &self,
+        battery_id: DeviceId,
+    ) -> impl core::future::Future<Output = Result<Bps, BatteryError>> {
+        T::battery_power_state(*self, battery_id)
+    }
+
+    fn set_battery_power_threshold(
+        &self,
+        battery_id: DeviceId,
+        power_threshold: Bpt,
+    ) -> impl core::future::Future<Output = Result<(), BatteryError>> {
+        T::set_battery_power_threshold(*self, battery_id, power_threshold)
+    }
+
+    fn battery_status(
+        &self,
+        battery_id: DeviceId,
+    ) -> impl core::future::Future<Output = Result<BstReturn, BatteryError>> {
+        T::battery_status(*self, battery_id)
+    }
+
+    fn battery_time_to_empty(
+        &self,
+        battery_id: DeviceId,
+        battery_discharge_rate: Btm,
+    ) -> impl core::future::Future<Output = Result<BtmReturnResult, BatteryError>> {
+        T::battery_time_to_empty(*self, battery_id, battery_discharge_rate)
+    }
+
+    fn set_battery_trip_point(
+        &self,
+        battery_id: DeviceId,
+        btp: Btp,
+    ) -> impl core::future::Future<Output = Result<(), BatteryError>> {
+        T::set_battery_trip_point(*self, battery_id, btp)
+    }
+
+    fn is_psu_in_use(
+        &self,
+        power_source_id: DeviceId,
+    ) -> impl core::future::Future<Output = Result<PsrReturn, BatteryError>> {
+        T::is_psu_in_use(*self, power_source_id)
+    }
+
+    fn power_source_information(
+        &self,
+        power_source_id: DeviceId,
+    ) -> impl core::future::Future<Output = Result<PifFixedStrings, BatteryError>> {
+        T::power_source_information(*self, power_source_id)
+    }
+
+    fn device_status(
+        &self,
+        battery_id: DeviceId,
+    ) -> impl core::future::Future<Output = Result<StaReturn, BatteryError>> {
+        T::device_status(*self, battery_id)
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

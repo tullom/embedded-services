@@ -2,10 +2,10 @@
 
 use battery_service_interface::BatteryError;
 use battery_service_interface::fuel_gauge::{DynamicBatteryData, FuelGauge, StaticBatteryData};
-use embedded_batteries_async::acpi::{PowerSourceState, PowerUnit};
+use embedded_batteries_async::acpi::{PowerSource, PowerSourceState, PowerUnit};
 use embedded_batteries_async::smart_battery::CapacityModeValue;
 use embedded_services::sync::Lockable;
-use embedded_services::{info, trace};
+use embedded_services::{error, info, trace};
 
 use battery_service_interface::{
     BctReturnResult, BixFixedStrings, Bmd, Bpc, Bps, BstReturn, BtmReturnResult, DeviceId, PifFixedStrings, PsrReturn,
@@ -13,18 +13,7 @@ use battery_service_interface::{
     STD_PIF_OEM_SIZE, STD_PIF_SERIAL_SIZE, StaReturn,
 };
 
-use power_policy_interface::capability::PowerCapability;
-
-/// Cached power-supply state used when answering ACPI power-source queries.
-///
-/// Currently always the default; this is a placeholder for future power policy
-/// integration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct PsuState {
-    pub psu_connected: bool,
-    pub power_capability: Option<PowerCapability>,
-}
+use power_policy_interface::psu::PsuState;
 
 /// Extract the raw numeric value from a [`CapacityModeValue`], discarding the unit
 /// tag. The unit (mA/mAh vs centiWatt) is conveyed to ACPI separately via the BIX
@@ -176,32 +165,26 @@ pub(crate) fn compute_sta() -> embedded_batteries_async::acpi::StaReturn {
     embedded_batteries_async::acpi::StaReturn::all()
 }
 
-pub(crate) fn compute_psr(psu_state: &PsuState) -> embedded_batteries_async::acpi::PsrReturn {
-    // TODO: Refactor to check if battery if force discharged,
-    // which should give an offline result even when the PSU is attached.
-    embedded_batteries_async::acpi::PsrReturn {
-        power_source: if psu_state.psu_connected {
-            embedded_batteries_async::acpi::PowerSource::Online
+pub(crate) fn compute_psr(psu_state: PsuState, unconstrained: bool) -> PsrReturn {
+    PsrReturn {
+        power_source: if unconstrained || matches!(psu_state, PsuState::ConnectedConsumer(_)) {
+            PowerSource::Online
         } else {
-            embedded_batteries_async::acpi::PowerSource::Offline
+            PowerSource::Offline
         },
     }
 }
 
-pub(crate) fn compute_pif(psu_state: &PsuState) -> PifFixedStrings {
-    // TODO: Grab real values from power policy
-    let capability = psu_state.power_capability.unwrap_or(PowerCapability {
-        voltage_mv: 0,
-        current_ma: 0,
-    });
-
+pub(crate) fn compute_pif() -> PifFixedStrings {
     PifFixedStrings {
         power_source_state: PowerSourceState::empty(),
-        max_output_power: capability.max_power_mw(),
-        max_input_power: capability.max_power_mw(),
-        model_number: [0u8; STD_PIF_MODEL_SIZE],
-        serial_number: [0u8; STD_PIF_SERIAL_SIZE],
-        oem_info: [0u8; STD_PIF_OEM_SIZE],
+        // `_PIF` reports rated maximums. Notifications carry only the negotiated contract, and
+        // unconstrained means outlet-powered rather than unlimited, so both ratings are unavailable.
+        max_output_power: u32::MAX,
+        max_input_power: u32::MAX,
+        model_number: [0; STD_PIF_MODEL_SIZE],
+        serial_number: [0; STD_PIF_SERIAL_SIZE],
+        oem_info: [0; STD_PIF_OEM_SIZE],
     }
 }
 
@@ -212,21 +195,25 @@ impl<'hw, Reg: crate::registration::Registration<'hw>> crate::Service<'hw, Reg> 
     /// [`DeviceId`] into its registered fuel gauge with this helper, locks it, and delegates to the
     /// corresponding reference-based query method below, which holds the actual logic.
     pub(super) fn fuel_gauge(&self, device_id: DeviceId) -> Result<&'hw Reg::FuelGauge, BatteryError> {
-        self.registration
-            .get_fuel_gauge(device_id)
-            .ok_or(BatteryError::UnknownDeviceId)
+        self.registration.get_fuel_gauge(device_id).ok_or_else(|| {
+            error!("Unknown fuel gauge ID {:?}", device_id);
+            BatteryError::UnknownDeviceId
+        })
     }
 }
 
 /// Reference-based ACPI query API.
 ///
-/// Unlike the [`BatteryService`](battery_service_interface::BatteryService) trait
-/// methods (which identify a battery by [`DeviceId`] and look the fuel gauge up
-/// through the service's [`Registration`](crate::registration::Registration)),
-/// these methods take an exclusive reference to the fuel gauge directly. The
-/// exclusive borrow proves the caller has sole access to the fuel gauge's cached
-/// state for the duration of the query, replacing the registration lookup and
-/// runtime lock with a compile-time guarantee.
+/// Battery queries take an exclusive reference to the fuel gauge. The borrow
+/// guarantees at compile time that the caller has sole access to its cached
+/// state during the query. No registration lookup or runtime lock is needed.
+///
+/// The [`BatteryService`](battery_service_interface::BatteryService) trait
+/// methods use a [`DeviceId`] to look up the fuel gauge through the service's
+/// [`Registration`](crate::registration::Registration).
+///
+/// Power-source queries use the same reference-based API and read only the
+/// external PSU state cached in the fuel gauge.
 ///
 /// TODO: Use this over DeviceId based approach?
 impl<'hw, Reg: crate::registration::Registration<'hw>> crate::Service<'hw, Reg> {
@@ -363,19 +350,26 @@ impl<'hw, Reg: crate::registration::Registration<'hw>> crate::Service<'hw, Reg> 
     /// Queries whether the power supply unit is currently in use (i.e., providing power to the system). Corresponds to ACPI's _PSR method.
     pub fn is_psu_in_use(
         &self,
-        _fuel_gauge: &mut <Reg::FuelGauge as Lockable>::Inner,
+        fuel_gauge: &mut <Reg::FuelGauge as Lockable>::Inner,
     ) -> Result<PsrReturn, BatteryError> {
         trace!("Battery service: got PSR command!");
-        Ok(compute_psr(&PsuState::default()))
+        let state = fuel_gauge.state();
+        Ok(compute_psr(state.psu_state(), state.is_psu_unconstrained()))
     }
 
     /// Queries information about the battery's power source. Corresponds to ACPI's _PIF method.
+    ///
+    /// Reports output and input ratings as unavailable (`0xFFFFFFFF`). ACPI defines them as the
+    /// source's rated maximums, but notifications carry only the negotiated contract.
+    /// Notifications do not include adapter identity or redundancy/shared-source
+    /// flags, so the strings are empty and those flags are clear.
+    /// TODO: Investigate how we can add more detailed power source information.
     pub fn power_source_information(
         &self,
         _fuel_gauge: &mut <Reg::FuelGauge as Lockable>::Inner,
     ) -> Result<PifFixedStrings, BatteryError> {
         trace!("Battery service: got PIF command!");
-        Ok(compute_pif(&PsuState::default()))
+        Ok(compute_pif())
     }
 
     /// Queries the battery's status. Corresponds to ACPI's _STA method.
@@ -390,14 +384,1040 @@ impl<'hw, Reg: crate::registration::Registration<'hw>> crate::Service<'hw, Reg> 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use core::{
+        future::Future,
+        pin::pin,
+        task::{Context, Waker},
+    };
 
     use embedded_batteries_async::smart_battery::CapacityModeValue;
 
-    use super::{compute_bix, compute_bpc, compute_bst};
+    use embassy_futures::block_on;
+    use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
+    use power_policy_interface::{
+        capability::{ConsumerFlags, ConsumerPowerCapability, DisconnectFlags, DisconnectReason, PowerCapability},
+        service::{UnconstrainedState, event::EventData as PowerPolicyEventData},
+    };
+
+    use super::*;
+    use crate::{
+        ArrayRegistration, BatteryService, DefaultPowerPolicyRouting, PowerPolicyRouting, PowerPolicyUpdate,
+        Registration, Service, State, mock::MockFuelGauge,
+    };
     use battery_service_interface::fuel_gauge::{
         DynamicBatteryData, DynamicBatteryMsgs, StaticBatteryData, StaticBatteryMsgs,
     };
+
+    struct RouteTo<const N: usize>([DeviceId; N]);
+
+    struct InheritedRouting;
+
+    impl PowerPolicyRouting for InheritedRouting {
+        type Event = SourceEvent;
+    }
+
+    impl<const N: usize> PowerPolicyRouting for RouteTo<N> {
+        type Event = PowerPolicyEventData;
+
+        fn route(&self, event: &Self::Event) -> impl Iterator<Item = (DeviceId, PowerPolicyUpdate)> + Clone {
+            DefaultPowerPolicyRouting
+                .route(event)
+                .flat_map(move |(_, state)| self.0.into_iter().map(move |id| (id, state)))
+        }
+    }
+
+    struct UpdateRouting<const N: usize>([(DeviceId, PsuState); N]);
+
+    impl<const N: usize> PowerPolicyRouting for UpdateRouting<N> {
+        type Event = PowerPolicyEventData;
+
+        fn route(&self, _event: &Self::Event) -> impl Iterator<Item = (DeviceId, PowerPolicyUpdate)> + Clone {
+            self.0
+                .into_iter()
+                .map(|(id, state)| (id, PowerPolicyUpdate::PsuState(state)))
+        }
+    }
+
+    #[derive(Clone)]
+    struct SourceEvent {
+        source: DeviceId,
+        data: PowerPolicyEventData,
+    }
+
+    impl From<SourceEvent> for PowerPolicyEventData {
+        fn from(event: SourceEvent) -> Self {
+            event.data
+        }
+    }
+
+    struct SourceRouting;
+
+    impl PowerPolicyRouting for SourceRouting {
+        type Event = SourceEvent;
+
+        fn route(&self, event: &Self::Event) -> impl Iterator<Item = (DeviceId, PowerPolicyUpdate)> + Clone {
+            DefaultPowerPolicyRouting
+                .route(&event.data)
+                .filter_map(move |(_, state)| match event.source {
+                    DeviceId(0) | DeviceId(1) => Some((event.source, state)),
+                    _ => None,
+                })
+        }
+    }
+
+    /// Expected external-power cache of a fuel gauge.
+    #[derive(Clone, Copy, Debug)]
+    enum Expected {
+        /// No consumer contract and no unconstrained flag.
+        Offline,
+        /// A consumer contract of this many mW, without the unconstrained flag.
+        Contract(u32),
+        /// The unconstrained flag, with the cached consumer contract in mW, if any.
+        Unconstrained(Option<u32>),
+    }
+
+    async fn assert_power_source<'hw, Reg: Registration<'hw>>(
+        service: &Service<'hw, Reg>,
+        id: DeviceId,
+        expected: Expected,
+    ) {
+        let (online, contract_mw, unconstrained) = match expected {
+            Expected::Offline => (false, None, false),
+            Expected::Contract(mw) => (true, Some(mw), false),
+            Expected::Unconstrained(contract_mw) => (true, contract_mw, true),
+        };
+        let status = BatteryService::is_psu_in_use(service, id).await.unwrap();
+        assert!(
+            status.power_source
+                == if online {
+                    PowerSource::Online
+                } else {
+                    PowerSource::Offline
+                }
+        );
+        let information = BatteryService::power_source_information(service, id).await.unwrap();
+        assert_eq!(information.max_output_power, u32::MAX);
+        assert_eq!(information.max_input_power, u32::MAX);
+        assert!(information.power_source_state.is_empty());
+        assert_eq!(information.model_number, [0; STD_PIF_MODEL_SIZE]);
+        assert_eq!(information.serial_number, [0; STD_PIF_SERIAL_SIZE]);
+        assert_eq!(information.oem_info, [0; STD_PIF_OEM_SIZE]);
+        let mut gauge = service.get_fuel_gauge(id).unwrap().lock().await;
+        let cached_mw = match gauge.state().psu_state() {
+            PsuState::ConnectedConsumer(capability) => Some(capability.capability.max_power_mw()),
+            _ => None,
+        };
+        assert_eq!(cached_mw, contract_mw);
+        assert_eq!(gauge.state().is_psu_unconstrained(), unconstrained);
+        assert!(service.is_psu_in_use(&mut *gauge).unwrap().power_source == status.power_source);
+        assert!(service.power_source_information(&mut *gauge).unwrap() == information);
+    }
+
+    #[test]
+    fn shared_references_forward_battery_queries() {
+        async fn query(service: impl BatteryService) {
+            for (id, voltage) in [(DeviceId(0), 11_100), (DeviceId(1), 7400)] {
+                assert_eq!(service.battery_info(id).await.unwrap().design_voltage, voltage);
+            }
+            assert_eq!(
+                service.battery_info(DeviceId(2)).await.err(),
+                Some(BatteryError::UnknownDeviceId)
+            );
+            assert!(service.is_psu_in_use(DeviceId(0)).await.unwrap().power_source == PowerSource::Offline);
+            assert!(service.is_psu_in_use(DeviceId(1)).await.unwrap().power_source == PowerSource::Online);
+            assert_eq!(
+                service
+                    .power_source_information(DeviceId(1))
+                    .await
+                    .unwrap()
+                    .max_output_power,
+                u32::MAX
+            );
+        }
+
+        block_on(async {
+            let first = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let second = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new_2s());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&first, &second],
+                routing: SourceRouting,
+            });
+            service
+                .process_power_policy_event(&SourceEvent {
+                    source: DeviceId(1),
+                    data: PowerPolicyEventData::ConsumerConnected(
+                        PowerCapability {
+                            voltage_mv: 20_000,
+                            current_ma: 3250,
+                        }
+                        .into(),
+                    ),
+                })
+                .await
+                .unwrap();
+
+            query(&service).await;
+            query(&&service).await;
+        });
+    }
+
+    #[test]
+    fn default_routing_updates_only_gauge_zero_for_all_sources() {
+        block_on(async {
+            let first = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let second = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&first, &second],
+                routing: InheritedRouting,
+            });
+
+            for source in 0..=u8::MAX {
+                let capability = PowerCapability {
+                    voltage_mv: 5000,
+                    current_ma: 1000 + u16::from(source),
+                };
+                service
+                    .process_power_policy_event(&SourceEvent {
+                        source: DeviceId(source),
+                        data: PowerPolicyEventData::ConsumerConnected(capability.into()),
+                    })
+                    .await
+                    .unwrap();
+                assert_power_source(&service, DeviceId(0), Expected::Contract(capability.max_power_mw())).await;
+                assert_power_source(&service, DeviceId(1), Expected::Offline).await;
+
+                service
+                    .process_power_policy_event(&SourceEvent {
+                        source: DeviceId(source),
+                        data: PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default()),
+                    })
+                    .await
+                    .unwrap();
+                assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+                assert_power_source(&service, DeviceId(1), Expected::Offline).await;
+            }
+        });
+    }
+
+    #[test]
+    fn routed_events_drive_cached_psu_queries() {
+        block_on(async {
+            let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let unrelated = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&gauge, &unrelated],
+                routing: DefaultPowerPolicyRouting,
+            });
+            assert!(!gauge.lock().await.state().is_present());
+            assert_eq!(gauge.lock().await.state().psu_state(), PsuState::Detached);
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+
+            for (capability, expected_mw) in [
+                (
+                    PowerCapability {
+                        voltage_mv: 5000,
+                        current_ma: 1500,
+                    },
+                    7500,
+                ),
+                (
+                    PowerCapability {
+                        voltage_mv: 20_000,
+                        current_ma: 3250,
+                    },
+                    65_000,
+                ),
+                (
+                    PowerCapability {
+                        voltage_mv: u16::MAX,
+                        current_ma: u16::MAX,
+                    },
+                    4_294_836,
+                ),
+                (
+                    PowerCapability {
+                        voltage_mv: 5000,
+                        current_ma: 0,
+                    },
+                    0,
+                ),
+            ] {
+                service
+                    .process_power_policy_event(&PowerPolicyEventData::ConsumerConnected(capability.into()))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    gauge.lock().await.state().psu_state(),
+                    PsuState::ConnectedConsumer(capability.into())
+                );
+                assert_power_source(&service, DeviceId(0), Expected::Contract(expected_mw)).await;
+                assert_power_source(&service, DeviceId(1), Expected::Offline).await;
+            }
+
+            for reason in [
+                None,
+                Some(DisconnectReason::Detached),
+                Some(DisconnectReason::Switching),
+                Some(DisconnectReason::AutoRenegotiation),
+                Some(DisconnectReason::ManualRenegotiation),
+                Some(DisconnectReason::RoleSwap),
+                Some(DisconnectReason::Reset),
+            ] {
+                service
+                    .process_power_policy_event(&PowerPolicyEventData::ConsumerConnected(
+                        PowerCapability {
+                            voltage_mv: 20_000,
+                            current_ma: 3250,
+                        }
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                let event = PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags { reason });
+                let expected_state = if reason == Some(DisconnectReason::Detached) {
+                    PsuState::Detached
+                } else {
+                    PsuState::Idle
+                };
+                for _ in 0..2 {
+                    service.process_power_policy_event(&event).await.unwrap();
+                    assert_eq!(gauge.lock().await.state().psu_state(), expected_state);
+                    assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+                    assert_power_source(&service, DeviceId(1), Expected::Offline).await;
+                    assert_eq!(unrelated.lock().await.state().psu_state(), PsuState::Detached);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn unconstrained_notifications_override_and_restore_cached_input() {
+        block_on(async {
+            let capability = PowerCapability {
+                voltage_mv: 20_000,
+                current_ma: 3250,
+            };
+            for (psu_state, contract_mw) in [
+                (PsuState::Detached, None),
+                (PsuState::Idle, None),
+                (PsuState::ConnectedProvider(capability.into()), None),
+                (PsuState::ConnectedConsumer(capability.into()), Some(65_000)),
+            ] {
+                let restored = contract_mw.map_or(Expected::Offline, Expected::Contract);
+                let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+                let unrelated = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+                gauge.lock().await.state_mut().set_psu_state(psu_state);
+                let service = Service::new(ArrayRegistration {
+                    fuel_gauges: [&gauge, &unrelated],
+                    routing: DefaultPowerPolicyRouting,
+                });
+                assert_power_source(&service, DeviceId(0), restored).await;
+
+                for notification in [
+                    UnconstrainedState::new(true, 1),
+                    UnconstrainedState::new(true, 2),
+                    UnconstrainedState::new(false, 2),
+                    UnconstrainedState::new(false, 0),
+                    UnconstrainedState::new(true, 0),
+                    UnconstrainedState::new(false, 0),
+                ] {
+                    service
+                        .process_power_policy_event(&PowerPolicyEventData::Unconstrained(notification))
+                        .await
+                        .unwrap();
+                    assert_eq!(gauge.lock().await.state().psu_state(), psu_state);
+                    assert_eq!(
+                        gauge.lock().await.state().is_psu_unconstrained(),
+                        notification.unconstrained
+                    );
+                    assert_power_source(
+                        &service,
+                        DeviceId(0),
+                        if notification.unconstrained {
+                            Expected::Unconstrained(contract_mw)
+                        } else {
+                            restored
+                        },
+                    )
+                    .await;
+                    assert_power_source(&service, DeviceId(1), Expected::Offline).await;
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn consumer_notifications_refresh_unconstrained_power() {
+        block_on(async {
+            let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&gauge],
+                routing: DefaultPowerPolicyRouting,
+            });
+            let constrained: ConsumerPowerCapability = PowerCapability {
+                voltage_mv: 20_000,
+                current_ma: 3250,
+            }
+            .into();
+            let unconstrained = ConsumerPowerCapability {
+                flags: ConsumerFlags {
+                    unconstrained_power: true,
+                    ..Default::default()
+                },
+                ..constrained
+            };
+            for (event, expected_power) in [
+                (
+                    PowerPolicyEventData::Unconstrained(UnconstrainedState::new(true, 1)),
+                    Expected::Unconstrained(None),
+                ),
+                (
+                    PowerPolicyEventData::ConsumerConnected(constrained),
+                    Expected::Contract(65_000),
+                ),
+                (
+                    PowerPolicyEventData::ConsumerConnected(unconstrained),
+                    Expected::Unconstrained(Some(65_000)),
+                ),
+                (
+                    PowerPolicyEventData::Unconstrained(UnconstrainedState::new(false, 1)),
+                    Expected::Contract(65_000),
+                ),
+                (
+                    PowerPolicyEventData::ConsumerConnected(unconstrained),
+                    Expected::Unconstrained(Some(65_000)),
+                ),
+                (
+                    PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default()),
+                    Expected::Offline,
+                ),
+                (
+                    PowerPolicyEventData::Unconstrained(UnconstrainedState::new(true, 1)),
+                    Expected::Unconstrained(None),
+                ),
+                (
+                    PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags {
+                        reason: Some(DisconnectReason::Detached),
+                    }),
+                    Expected::Offline,
+                ),
+            ] {
+                service.process_power_policy_event(&event).await.unwrap();
+                assert_power_source(&service, DeviceId(0), expected_power).await;
+            }
+        });
+    }
+
+    #[test]
+    fn outlet_powered_consumer_reports_unavailable_ratings() {
+        block_on(async {
+            let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&gauge],
+                routing: DefaultPowerPolicyRouting,
+            });
+            // A 65 W contract from an outlet-powered adapter is neither unlimited nor the adapter's rating.
+            let outlet_powered = ConsumerPowerCapability {
+                capability: PowerCapability {
+                    voltage_mv: 20_000,
+                    current_ma: 3250,
+                },
+                flags: ConsumerFlags {
+                    unconstrained_power: true,
+                    ..Default::default()
+                },
+            };
+            service
+                .process_power_policy_event(&PowerPolicyEventData::ConsumerConnected(outlet_powered))
+                .await
+                .unwrap();
+            let status = BatteryService::is_psu_in_use(&service, DeviceId(0)).await.unwrap();
+            assert!(status.power_source == PowerSource::Online);
+            let information = BatteryService::power_source_information(&service, DeviceId(0))
+                .await
+                .unwrap();
+            assert_eq!(information.max_output_power, u32::MAX);
+            assert_eq!(information.max_input_power, u32::MAX);
+        });
+    }
+
+    #[test]
+    fn attached_psu_without_input_power_reports_offline_and_unknown_output() {
+        block_on(async {
+            let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&gauge],
+                routing: DefaultPowerPolicyRouting,
+            });
+            for state in [
+                PsuState::Idle,
+                PsuState::ConnectedProvider(
+                    PowerCapability {
+                        voltage_mv: 20_000,
+                        current_ma: 3250,
+                    }
+                    .into(),
+                ),
+            ] {
+                gauge.lock().await.state_mut().set_psu_state(state);
+                assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+                assert_eq!(gauge.lock().await.state().psu_state(), state);
+            }
+        });
+    }
+
+    #[test]
+    fn psu_queries_are_independent_per_fuel_gauge() {
+        block_on(async {
+            let first = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let second = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new_2s());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&first, &second],
+                routing: SourceRouting,
+            });
+
+            for (source, capability) in [
+                (
+                    DeviceId(0),
+                    PowerCapability {
+                        voltage_mv: 5000,
+                        current_ma: 1500,
+                    },
+                ),
+                (
+                    DeviceId(1),
+                    PowerCapability {
+                        voltage_mv: 20_000,
+                        current_ma: 3250,
+                    },
+                ),
+            ] {
+                service
+                    .process_power_policy_event(&SourceEvent {
+                        source,
+                        data: PowerPolicyEventData::ConsumerConnected(capability.into()),
+                    })
+                    .await
+                    .unwrap();
+            }
+            assert_power_source(&service, DeviceId(0), Expected::Contract(7500)).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(65_000)).await;
+
+            for unconstrained in [true, false] {
+                service
+                    .process_power_policy_event(&SourceEvent {
+                        source: DeviceId(0),
+                        data: PowerPolicyEventData::Unconstrained(UnconstrainedState::new(unconstrained, 2)),
+                    })
+                    .await
+                    .unwrap();
+                assert_power_source(
+                    &service,
+                    DeviceId(0),
+                    if unconstrained {
+                        Expected::Unconstrained(Some(7500))
+                    } else {
+                        Expected::Contract(7500)
+                    },
+                )
+                .await;
+                assert_power_source(&service, DeviceId(1), Expected::Contract(65_000)).await;
+            }
+
+            service
+                .process_power_policy_event(&SourceEvent {
+                    source: DeviceId(0),
+                    data: PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default()),
+                })
+                .await
+                .unwrap();
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(65_000)).await;
+            service
+                .process_power_policy_event(&SourceEvent {
+                    source: DeviceId(1),
+                    data: PowerPolicyEventData::ConsumerConnected(
+                        PowerCapability {
+                            voltage_mv: 20_000,
+                            current_ma: 5000,
+                        }
+                        .into(),
+                    ),
+                })
+                .await
+                .unwrap();
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(100_000)).await;
+
+            for (id, voltage) in [(DeviceId(0), 11_100), (DeviceId(1), 7400)] {
+                assert_eq!(
+                    BatteryService::battery_info(&service, id).await.unwrap().design_voltage,
+                    voltage
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn routing_can_fan_out_a_shared_source() {
+        block_on(async {
+            let first = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let second = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&first, &second],
+                routing: RouteTo([DeviceId(0), DeviceId(1)]),
+            });
+
+            service
+                .process_power_policy_event(&PowerPolicyEventData::ConsumerConnected(
+                    PowerCapability {
+                        voltage_mv: 20_000,
+                        current_ma: 3250,
+                    }
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            for id in [DeviceId(0), DeviceId(1)] {
+                assert_power_source(&service, id, Expected::Contract(65_000)).await;
+            }
+            for (unconstrained, expected_power) in [
+                (true, Expected::Unconstrained(Some(65_000))),
+                (false, Expected::Contract(65_000)),
+            ] {
+                service
+                    .process_power_policy_event(&PowerPolicyEventData::Unconstrained(UnconstrainedState::new(
+                        unconstrained,
+                        1,
+                    )))
+                    .await
+                    .unwrap();
+                for id in [DeviceId(0), DeviceId(1)] {
+                    assert_power_source(&service, id, expected_power).await;
+                }
+            }
+            service
+                .process_power_policy_event(&PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default()))
+                .await
+                .unwrap();
+            for id in [DeviceId(0), DeviceId(1)] {
+                assert_power_source(&service, id, Expected::Offline).await;
+            }
+        });
+    }
+
+    #[test]
+    fn custom_routing_controls_event_filtering_and_each_gauge_state() {
+        block_on(async {
+            let first = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let second = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let updates = [
+                (DeviceId(0), PsuState::Idle),
+                (
+                    DeviceId(1),
+                    PsuState::ConnectedConsumer(
+                        PowerCapability {
+                            voltage_mv: 20_000,
+                            current_ma: 3250,
+                        }
+                        .into(),
+                    ),
+                ),
+            ];
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&first, &second],
+                routing: UpdateRouting(updates),
+            });
+            for event in [
+                PowerPolicyEventData::ConsumerConnected(
+                    PowerCapability {
+                        voltage_mv: 5000,
+                        current_ma: 1500,
+                    }
+                    .into(),
+                ),
+                PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags {
+                    reason: Some(DisconnectReason::Detached),
+                }),
+                PowerPolicyEventData::ProviderDisconnected,
+                PowerPolicyEventData::Unconstrained(UnconstrainedState::new(true, 2)),
+            ] {
+                for gauge in [&first, &second] {
+                    gauge.lock().await.state_mut().set_psu_state(PsuState::Detached);
+                }
+                service.process_power_policy_event(&event).await.unwrap();
+                for (id, expected) in updates {
+                    assert_eq!(
+                        service.get_fuel_gauge(id).unwrap().lock().await.state().psu_state(),
+                        expected
+                    );
+                }
+                assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+                assert_power_source(&service, DeviceId(1), Expected::Contract(65_000)).await;
+            }
+        });
+    }
+
+    #[test]
+    fn unrouted_gauges_remain_offline() {
+        block_on(async {
+            let first = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let second = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&first, &second],
+                routing: SourceRouting,
+            });
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Offline).await;
+            service
+                .process_power_policy_event(&SourceEvent {
+                    source: DeviceId(1),
+                    data: PowerPolicyEventData::ConsumerConnected(
+                        PowerCapability {
+                            voltage_mv: 5000,
+                            current_ma: 1500,
+                        }
+                        .into(),
+                    ),
+                })
+                .await
+                .unwrap();
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(7500)).await;
+
+            service
+                .process_power_policy_event(&SourceEvent {
+                    source: DeviceId(2),
+                    data: PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default()),
+                })
+                .await
+                .unwrap();
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert_power_source(&service, DeviceId(1), Expected::Contract(7500)).await;
+        });
+    }
+
+    #[test]
+    fn psu_queries_reject_unregistered_gauge_ids() {
+        block_on(async {
+            type Gauge = Mutex<NoopRawMutex, MockFuelGauge>;
+            let empty = Service::new(ArrayRegistration::<Gauge, 0, _> {
+                fuel_gauges: [],
+                routing: RouteTo([]),
+            });
+            for id in 0..=u8::MAX {
+                assert!(matches!(
+                    BatteryService::is_psu_in_use(&empty, DeviceId(id)).await,
+                    Err(BatteryError::UnknownDeviceId)
+                ));
+                assert!(matches!(
+                    BatteryService::power_source_information(&empty, DeviceId(id)).await,
+                    Err(BatteryError::UnknownDeviceId)
+                ));
+            }
+            let first = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let second = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&first, &second],
+                routing: RouteTo([]),
+            });
+            for id in 2..=u8::MAX {
+                assert!(matches!(
+                    BatteryService::is_psu_in_use(&service, DeviceId(id)).await,
+                    Err(BatteryError::UnknownDeviceId)
+                ));
+                assert!(matches!(
+                    BatteryService::power_source_information(&service, DeviceId(id)).await,
+                    Err(BatteryError::UnknownDeviceId)
+                ));
+            }
+        });
+    }
+
+    #[test]
+    fn cancelled_fanout_can_be_retried_without_losing_the_event() {
+        block_on(async {
+            let first = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let second = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&first, &second],
+                routing: RouteTo([DeviceId(0), DeviceId(1)]),
+            });
+            for (event, expected_power) in [
+                (
+                    PowerPolicyEventData::ConsumerConnected(
+                        PowerCapability {
+                            voltage_mv: 20_000,
+                            current_ma: 3250,
+                        }
+                        .into(),
+                    ),
+                    Expected::Contract(65_000),
+                ),
+                (
+                    PowerPolicyEventData::Unconstrained(UnconstrainedState::new(true, 1)),
+                    Expected::Unconstrained(Some(65_000)),
+                ),
+                (
+                    PowerPolicyEventData::Unconstrained(UnconstrainedState::new(false, 0)),
+                    Expected::Contract(65_000),
+                ),
+            ] {
+                let second_guard = second.lock().await;
+                {
+                    let mut update = pin!(service.process_power_policy_event(&event));
+                    assert!(
+                        update
+                            .as_mut()
+                            .poll(&mut Context::from_waker(Waker::noop()))
+                            .is_pending()
+                    );
+                    assert_power_source(&service, DeviceId(0), expected_power).await;
+                }
+                drop(second_guard);
+                service.process_power_policy_event(&event).await.unwrap();
+                for id in [DeviceId(0), DeviceId(1)] {
+                    assert_power_source(&service, id, expected_power).await;
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn backpressured_notifications_and_cached_queries_do_not_lock_the_psu() {
+        use crate::{Event, EventReceiver};
+        use core::future::{pending, ready};
+        use embassy_sync::channel::Channel;
+        use embedded_services::event::{MapSender, NoopSender, Receiver};
+        use power_policy_interface::{
+            psu::event::NonBlockingSenderNotifier as PsuNotifier,
+            service::{event::SenderNotifier, notification::Notifier},
+        };
+        use power_policy_interface_test_mocks::psu::Mock as MockPsu;
+
+        block_on(async {
+            type TestPsu = Mutex<NoopRawMutex, MockPsu<PsuNotifier<NoopSender>>>;
+            let psu = TestPsu::new(MockPsu::new("PSU", PsuNotifier(NoopSender)));
+            let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&gauge],
+                routing: RouteTo([DeviceId(0)]),
+            });
+            let events = Channel::<NoopRawMutex, PowerPolicyEventData, 1>::new();
+            let mut event_receiver = EventReceiver::new(events.dyn_receiver());
+            let mut notifier = SenderNotifier::new(MapSender::new(events.dyn_sender(), PowerPolicyEventData::from));
+            let capability = PowerCapability {
+                voltage_mv: 20_000,
+                current_ma: 3250,
+            }
+            .into();
+
+            let mut psu_guard = psu.lock().await;
+            psu_guard.state.attach().unwrap();
+            psu_guard.state.connect_consumer(capability).unwrap();
+            notifier.notify_consumer_connected(&psu, capability).await.unwrap();
+            psu_guard.state.disconnect(false).unwrap();
+
+            let mut send = pin!(notifier.notify_consumer_disconnected(&psu, DisconnectFlags::default()));
+            assert!(send.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+            assert_eq!(event_receiver.wait_next_with_poll(ready(())).await, Event::Poll);
+            assert!(send.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+            let connected = event_receiver.wait_next_with_poll(pending()).await;
+            assert_eq!(
+                connected,
+                Event::PowerPolicy(PowerPolicyEventData::ConsumerConnected(capability))
+            );
+            if let Event::PowerPolicy(event) = connected {
+                service.process_power_policy_event(&event).await.unwrap();
+            }
+            assert_eq!(psu_guard.state.psu_state, PsuState::Idle);
+            assert_eq!(
+                gauge.lock().await.state().psu_state(),
+                PsuState::ConnectedConsumer(capability)
+            );
+            assert_power_source(&service, DeviceId(0), Expected::Contract(65_000)).await;
+            send.await.unwrap();
+            let disconnected = event_receiver.wait_next_with_poll(pending()).await;
+            assert_eq!(
+                disconnected,
+                Event::PowerPolicy(PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default()))
+            );
+            if let Event::PowerPolicy(event) = disconnected {
+                service.process_power_policy_event(&event).await.unwrap();
+            }
+            assert_eq!(gauge.lock().await.state().psu_state(), PsuState::Idle);
+            assert_power_source(&service, DeviceId(0), Expected::Offline).await;
+            assert!(psu.try_lock().is_err());
+            assert!(event_receiver.try_next().is_none());
+        });
+    }
+
+    #[test]
+    fn invalid_routes_are_rejected_before_any_cache_is_changed() {
+        block_on(async {
+            let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            gauge
+                .lock()
+                .await
+                .state_mut()
+                .set_psu_state(PsuState::ConnectedConsumer(
+                    PowerCapability {
+                        voltage_mv: 5000,
+                        current_ma: 1500,
+                    }
+                    .into(),
+                ));
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&gauge],
+                routing: UpdateRouting([(DeviceId(0), PsuState::Idle), (DeviceId(1), PsuState::Detached)]),
+            });
+            for event in [
+                PowerPolicyEventData::ConsumerConnected(
+                    PowerCapability {
+                        voltage_mv: 20_000,
+                        current_ma: 3250,
+                    }
+                    .into(),
+                ),
+                PowerPolicyEventData::ConsumerDisconnected(DisconnectFlags::default()),
+                PowerPolicyEventData::ProviderDisconnected,
+            ] {
+                assert!(matches!(
+                    service.process_power_policy_event(&event).await,
+                    Err(BatteryError::UnknownDeviceId)
+                ));
+                assert_power_source(&service, DeviceId(0), Expected::Contract(7500)).await;
+            }
+        });
+    }
+
+    #[test]
+    fn unconstrained_routes_validate_all_ids_before_updating_caches() {
+        block_on(async {
+            let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+            gauge
+                .lock()
+                .await
+                .state_mut()
+                .set_psu_state(PsuState::ConnectedConsumer(
+                    PowerCapability {
+                        voltage_mv: 20_000,
+                        current_ma: 3250,
+                    }
+                    .into(),
+                ));
+            let service = Service::new(ArrayRegistration {
+                fuel_gauges: [&gauge],
+                routing: RouteTo([DeviceId(0), DeviceId(1)]),
+            });
+            for unconstrained in [true, false] {
+                gauge.lock().await.state_mut().set_psu_unconstrained(!unconstrained);
+                assert!(matches!(
+                    service
+                        .process_power_policy_event(&PowerPolicyEventData::Unconstrained(UnconstrainedState::new(
+                            unconstrained,
+                            1,
+                        )))
+                        .await,
+                    Err(BatteryError::UnknownDeviceId)
+                ));
+                assert_power_source(
+                    &service,
+                    DeviceId(0),
+                    if unconstrained {
+                        Expected::Contract(65_000)
+                    } else {
+                        Expected::Unconstrained(Some(65_000))
+                    },
+                )
+                .await;
+            }
+        });
+    }
+
+    #[test]
+    fn provider_events_do_not_change_cached_input() {
+        block_on(async {
+            let capability = ConsumerPowerCapability {
+                capability: PowerCapability {
+                    voltage_mv: 5000,
+                    current_ma: 1500,
+                },
+                flags: ConsumerFlags {
+                    unconstrained_power: true,
+                    psu_type: None,
+                },
+            };
+            for state in [
+                PsuState::Detached,
+                PsuState::Idle,
+                PsuState::ConnectedConsumer(capability),
+            ] {
+                let gauge = Mutex::<NoopRawMutex, _>::new(MockFuelGauge::new());
+                gauge.lock().await.state_mut().set_psu_state(state);
+                let service = Service::new(ArrayRegistration {
+                    fuel_gauges: [&gauge],
+                    routing: RouteTo([DeviceId(0)]),
+                });
+                for event in [
+                    PowerPolicyEventData::ProviderConnected(
+                        PowerCapability {
+                            voltage_mv: 20_000,
+                            current_ma: 5000,
+                        }
+                        .into(),
+                    ),
+                    PowerPolicyEventData::ProviderDisconnected,
+                ] {
+                    service.process_power_policy_event(&event).await.unwrap();
+                    assert_eq!(gauge.lock().await.state().psu_state(), state);
+                    assert_power_source(
+                        &service,
+                        DeviceId(0),
+                        if matches!(state, PsuState::ConnectedConsumer(_)) {
+                            Expected::Unconstrained(Some(7500))
+                        } else {
+                            Expected::Offline
+                        },
+                    )
+                    .await;
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn cached_power_is_independent_of_fuel_gauge_state_transitions() {
+        let capability = PowerCapability {
+            voltage_mv: 20_000,
+            current_ma: 3250,
+        };
+        for psu_state in [
+            PsuState::Detached,
+            PsuState::Idle,
+            PsuState::ConnectedConsumer(capability.into()),
+            PsuState::ConnectedProvider(capability.into()),
+        ] {
+            let mut state: State = State::default();
+            state.set_psu_state(psu_state);
+            assert!(!state.is_psu_unconstrained());
+            state.set_psu_unconstrained(true);
+            assert!(!state.is_present());
+            state.on_initialized();
+            state.on_static_data(|_| {});
+            state.on_dynamic_data(|_| {});
+            state.on_timeout();
+            state.on_recovered();
+            assert_eq!(state.psu_state(), psu_state);
+            assert!(state.is_psu_unconstrained());
+            state.set_psu_state(PsuState::Detached);
+            assert_eq!(state.psu_state(), PsuState::Detached);
+            assert!(!state.is_psu_unconstrained());
+            assert!(state.is_operational());
+        }
+    }
 
     /// An OEM dynamic data type that embeds the standard messages and extends
     /// them with extra fields.

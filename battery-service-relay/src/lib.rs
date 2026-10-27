@@ -7,6 +7,8 @@ mod serialization;
 pub use serialization::{AcpiBatteryError, AcpiBatteryRequest, AcpiBatteryResponse, AcpiBatteryResult};
 
 /// Relays messages to and from a battery service implementation over MCTP.
+///
+/// The handler accepts shared references as well as owned services:
 pub struct BatteryServiceRelayHandler<S: battery_service_interface::BatteryService> {
     service: S,
 }

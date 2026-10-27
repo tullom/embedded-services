@@ -3,19 +3,8 @@ use core::pin::pin;
 use crate::service::Event;
 use embassy_futures::select::{Either, select, select_slice};
 use embedded_services::{event::Receiver, sync::Lockable};
-use power_policy_interface::service::event::EventData as PowerPolicyEventData;
+use power_policy_interface::service::event::{EventData as PowerPolicyEventData, PowerPolicySubscriber};
 use tcpm_interface::{port::pd::Pd, service::event::PortEvent};
-
-struct PowerPolicySubscriber<PowerReceiver: Receiver<PowerPolicyEventData>> {
-    receiver: PowerReceiver,
-}
-
-impl<PowerReceiver: Receiver<PowerPolicyEventData>> PowerPolicySubscriber<PowerReceiver> {
-    /// Wait for a power policy event
-    async fn wait_next(&mut self) -> PowerPolicyEventData {
-        self.receiver.wait_next().await
-    }
-}
 
 pub struct ArrayPortReceivers<
     'port,
@@ -61,7 +50,7 @@ pub struct ArrayEventReceiver<
     PowerReceiver: Receiver<PowerPolicyEventData>,
 > {
     /// Power policy event subscriber
-    power_policy_event_subscriber: PowerPolicySubscriber<PowerReceiver>,
+    power_policy_event_subscriber: PowerPolicySubscriber<PowerPolicyEventData, PowerReceiver>,
     /// Port event receivers and corresponding ports
     port_receivers: ArrayPortReceivers<'a, N, Port, PortReceiver>,
 }
@@ -82,9 +71,7 @@ impl<
     ) -> Self {
         Self {
             port_receivers: ArrayPortReceivers { ports, port_receivers },
-            power_policy_event_subscriber: PowerPolicySubscriber {
-                receiver: power_policy_event_receiver,
-            },
+            power_policy_event_subscriber: PowerPolicySubscriber::new(power_policy_event_receiver),
         }
     }
 
