@@ -50,6 +50,11 @@ where
 /// Receives power-policy notifications.
 ///
 /// Wraps any [`Receiver`] and forwards its events unchanged.
+///
+/// Keeping this in its own field lets us wait on multiple receivers with `select`,
+/// since each wait borrows only its own field. With `&mut self` helper methods on
+/// the parent struct, each wait would borrow the whole struct instead, so the
+/// borrow checker wouldn't allow both waits at once.
 pub struct PowerPolicySubscriber<E, R: Receiver<E>> {
     receiver: R,
     // Track E without owning it or imposing its Send/Sync requirements.
